@@ -1,0 +1,26 @@
+# Uploaded files
+wwwroot/uploads/*
+!wwwroot/uploads/.gitkeep
+
+# Build results
+bin/
+obj/
+publish/
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET Core
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Log files
+*.log

@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DocumentTranslation.Web", "DocumentTranslation.Web.csproj", "{FDCD1112-1C20-0AF2-2019-9D3962EC1B9B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FDCD1112-1C20-0AF2-2019-9D3962EC1B9B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FDCD1112-1C20-0AF2-2019-9D3962EC1B9B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FDCD1112-1C20-0AF2-2019-9D3962EC1B9B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FDCD1112-1C20-0AF2-2019-9D3962EC1B9B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {CF2AA5BF-776B-410D-81F2-91611CE1B376}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,94 @@
+﻿@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Home";
+}
+
+<div class="text-center">
+    <div class="jumbotron bg-primary text-white rounded p-5 mb-4">
+        <h1 class="display-4">
+            <i class="fas fa-language"></i>
+            Document Translation Service
+        </h1>
+        <p class="lead">Translate your documents quickly and easily using Azure Translator services.</p>
+        <hr class="my-4 bg-white">
+        <p>Upload your documents and translate them into multiple languages with just a few clicks.</p>
+        <a class="btn btn-light btn-lg" asp-page="/Translate" role="button">
+            <i class="fas fa-upload"></i>
+            Start Translating
+        </a>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-file-upload fa-3x text-primary mb-3"></i>
+                <h5 class="card-title">Easy Upload</h5>
+                <p class="card-text">Simply drag and drop or select your document files. We support various formats including Word, PDF, PowerPoint, and more.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-globe fa-3x text-success mb-3"></i>
+                <h5 class="card-title">Multiple Languages</h5>
+                <p class="card-text">Translate to and from dozens of languages with high-quality results powered by Azure Translator services.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-download fa-3x text-info mb-3"></i>
+                <h5 class="card-title">Quick Results</h5>
+                <p class="card-text">Get your translated documents in the same format as the original, ready for download in minutes.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-secondary text-white">
+                <h5 class="mb-0">
+                    <i class="fas fa-file-alt"></i>
+                    Supported File Formats
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <i class="fas fa-file-word text-primary"></i> Microsoft Word (.docx)
+                    </div>
+                    <div class="col-md-3">
+                        <i class="fas fa-file-pdf text-danger"></i> PDF Documents (.pdf)
+                    </div>
+                    <div class="col-md-3">
+                        <i class="fas fa-file-powerpoint text-warning"></i> PowerPoint (.pptx)
+                    </div>
+                    <div class="col-md-3">
+                        <i class="fas fa-file-excel text-success"></i> Excel (.xlsx)
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-md-3">
+                        <i class="fas fa-file-alt text-secondary"></i> Text Files (.txt)
+                    </div>
+                    <div class="col-md-3">
+                        <i class="fas fa-file-code text-info"></i> HTML Files (.html)
+                    </div>
+                    <div class="col-md-3">
+                        <i class="fab fa-markdown text-dark"></i> Markdown (.md)
+                    </div>
+                    <div class="col-md-3">
+                        <i class="fas fa-plus text-muted"></i> And more...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

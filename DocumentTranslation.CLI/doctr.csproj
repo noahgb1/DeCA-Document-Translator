@@ -1,0 +1,59 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>DocumentTranslation.CLI</RootNamespace>
+    <Version>0.0.5</Version>
+    <Authors>Chris Wendt</Authors>
+    <Product>Document Translation</Product>
+    <Description>Translate documents using the Azure Translator service</Description>
+    <Copyright>MIT license</Copyright>
+    <PackageLicenseExpression></PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MicrosoftTranslator/DocumentTranslation</PackageProjectUrl>
+    <PackageIcon>DocumentTranslatorIcon_100.png</PackageIcon>
+    <RepositoryUrl>https://github.com/MicrosoftTranslator/DocumentTranslation</RepositoryUrl>
+    <RepositoryType>Github</RepositoryType>
+    <PackageReleaseNotes>Initial pre-release. </PackageReleaseNotes>
+    <NeutralLanguage>en</NeutralLanguage>
+    <AssemblyVersion>0.0.8.0</AssemblyVersion>
+    <FileVersion>0.0.8.0</FileVersion>
+    <SignAssembly>true</SignAssembly>
+    <DelaySign>false</DelaySign>
+    <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
+    <StartupObject>DocumentTranslation.CLI.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="4.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="DocumentTranslatorIcon_100.png">
+      <Pack>True</Pack>
+      <PackagePath></PackagePath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DocumentTranslationService\DocumentTranslationService.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="Properties\Resources.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Update="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+
+ 
+
+</Project>

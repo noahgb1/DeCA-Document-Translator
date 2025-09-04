@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?define doctr_TargetDir=$(var.doctr.TargetDir)?>
+  <?define DocumentTranslation.GUI_TargetDir=$(var.DocumentTranslation.GUI.TargetDir)?>
+  <Product Id="*" Name="Document Translation" Language="1033" Version="1.0.3.0" Manufacturer="Microsoft" UpgradeCode="cc63954a-c510-49da-af5f-dc82af6502e1">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+
+    <MajorUpgrade AllowDowngrades="yes" Schedule="afterInstallInitialize" IgnoreRemoveFailure="yes"/>
+    <Media Id="1" Cabinet ="DocumentTranslation.cab" EmbedCab="yes" />
+    <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
+    <Feature Id="ProductFeatureGUI" Title="Windows" Level="1">
+      <ComponentGroupRef Id="ProductComponentsGUI" />
+      <ComponentGroupRef Id="ProductComponentsBase" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+    <Feature Id="ProductFeatureCLI" Title="Command Line" Level="1">
+      <ComponentGroupRef Id="ProductComponentsCLI" />
+      <ComponentGroupRef Id="ProductComponentsBase" />
+    </Feature>
+
+    <UI>
+      <UIRef Id="WixUI_FeatureTree" />
+      <Publish Dialog="ExitDialog"
+          Control="Finish"
+          Event="DoAction"
+          Value="LaunchApplication">
+        WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed
+      </Publish>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Run Document Translation" />
+    <Property Id="WixShellExecTarget" Value="[#DocumentTranslation.GUI.exe]" />
+    </UI>
+    <CustomAction Id="LaunchApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes"/>
+  </Product>
+
+
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="Document Translation" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+      </Directory>
+    </Directory>
+  </Fragment>
+
+
+  <Fragment>
+    <Icon Id="DocumentIcon" SourceFile="$(var.DocumentTranslation.GUI_TargetDir)DocumentTranslatorIcon_100.ico" />
+
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="ApplicationShortcut" Guid="{3CBF3CA7-53A6-43E9-B60A-265A87749A7C}">
+        <Shortcut Id="ApplicationStartMenuShortcut" Icon="DocumentIcon"
+                  Name="Document Translation" Description="Document Translation with Microsoft Azure" Target="[INSTALLFOLDER]DocumentTranslation.GUI.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Translator\DocumentTranslation" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponentsGUI" Directory="INSTALLFOLDER">
+      <Component Id="DocumentTranslation.GUI.runtimeconfig.json" Guid="e01c88ed-791d-4b78-8249-eb9218b8e04f">
+        <File Id="DocumentTranslation.GUI.runtimeconfig.json" Name="DocumentTranslation.GUI.runtimeconfig.json" Source="$(var.DocumentTranslation.GUI_TargetDir)DocumentTranslation.GUI.runtimeconfig.json" />
+      </Component>
+      <Component Id="DocumentTranslationService.dll" Guid="54e6bc61-8bb8-4d5e-89d4-a73128f9a3d1">
+        <File Id="DocumentTranslationService.dll" Name="DocumentTranslationService.dll" Source="$(var.DocumentTranslationService.TargetDir)DocumentTranslationService.dll" />
+      </Component>
+      <Component Id="DocumentTranslation.GUI.dll" Guid="c3d60c1e-3c17-4f28-9aa5-6d36d07659f6">
+        <File Id="DocumentTranslation.GUI.dll" Name="DocumentTranslation.GUI.dll" Source="$(var.DocumentTranslation.GUI_TargetDir)DocumentTranslation.GUI.dll" />
+      </Component>
+      <Component Id="DocumentTranslation.GUI.exe" Guid="C93A0556-DA3F-4DCA-85A4-D7759C224659">
+        <File Id="DocumentTranslation.GUI.exe" Name="DocumentTranslation.GUI.exe" Source="$(var.DocumentTranslation.GUI_TargetDir)DocumentTranslation.GUI.exe" />
+      </Component>
+    </ComponentGroup>
+    <ComponentGroup Id="ProductComponentsCLI" Directory="INSTALLFOLDER">
+      <Component Id="doctr.dll" Guid="8325feec-d2d2-4058-886e-46face493d14">
+        <File Id="doctr.dll" Name="doctr.dll" Source="$(var.doctr_TargetDir)doctr.dll" />
+      </Component>
+      <Component Id="doctr.exe" Guid="AD28EAB5-087B-4985-A54F-485D08F990E8" >
+        <File Id="doctr.exe" Name="doctr.exe" Source="$(var.doctr_TargetDir)doctr.exe" />
+      </Component>
+      <Component Id="McMaster.Extensions.CommandLineUtils.dll" Guid="198f2c2d-e585-4a08-af76-7eed9e77f922">
+        <File Id="McMaster.Extensions.CommandLineUtils.dll" Name="McMaster.Extensions.CommandLineUtils.dll" Source="$(var.doctr_TargetDir)McMaster.Extensions.CommandLineUtils.dll" />
+      </Component>
+      <Component Id="doctr.runtimeconfig.json" Guid="91a39466-ff7a-4101-8925-49ed9ec25551">
+        <File Id="doctr.runtimeconfig.json" Name="doctr.runtimeconfig.json" Source="$(var.doctr_TargetDir)doctr.runtimeconfig.json" />
+      </Component>
+    </ComponentGroup>
+    <ComponentGroup Id="ProductComponentsBase" Directory="INSTALLFOLDER">
+      <Component Id="Azure.Storage.Blobs.dll" Guid="d5f64bf8-f3d8-4330-be41-0c0a79395db5">
+        <File Id="Azure.Storage.Blobs.dll" Name="Azure.Storage.Blobs.dll" Source="$(var.doctr_TargetDir)Azure.Storage.Blobs.dll" />
+      </Component>
+      <Component Id="Azure.Core.dll" Guid="9f025167-0577-4556-bc99-77d849c0e66b">
+        <File Id="Azure.Core.dll" Name="Azure.Core.dll" Source="$(var.doctr_TargetDir)Azure.Core.dll" />
+      </Component>
+      <Component Id="System.Memory.Data.dll" Guid="fceb9dd2-b09c-4cea-ad40-453cadc258c0">
+        <File Id="System.Memory.Data.dll" Name="System.Memory.Data.dll" Source="$(var.doctr_TargetDir)System.Memory.Data.dll" />
+      </Component>
+      <Component Id="Azure.Storage.Common.dll" Guid="e724eb7f-a02e-48fd-9861-84cf0209a114">
+        <File Id="Azure.Storage.Common.dll" Name="Azure.Storage.Common.dll" Source="$(var.doctr_TargetDir)Azure.Storage.Common.dll" />
+      </Component>
+      <Component Id="Microsoft.Bcl.AsyncInterfaces.dll" Guid="885b0635-4475-42e4-8e09-c77569cd8eb0">
+        <File Id="Microsoft.Bcl.AsyncInterfaces.dll" Name="Microsoft.Bcl.AsyncInterfaces.dll" Source="$(var.doctr_TargetDir)Microsoft.Bcl.AsyncInterfaces.dll" />
+      </Component>
+      <Component Id="Azure.AI.Translation.Document.dll" Guid="D872C38E-B4CD-40D9-8290-D7F28F5C5CF5">
+        <File Id="Azure.AI.Translation.Document.dll" Name="Azure.AI.Translation.Document.dll" Source="$(var.doctr_TargetDir)Azure.AI.Translation.Document.dll" />
+      </Component>
+      <Component Id="Azure.Identity.dll" Guid="258F35F5-C1BF-41BB-93A8-8B861AA196B4">
+        <File Id="Azure.Identity.dll" Name="Azure.Identity.dll" Source="$(var.doctr_TargetDir)Azure.Identity.dll" />
+      </Component>
+		<Component Id="System.IO.Hashing.dll" Guid="B29F9D14-AD5C-4C92-B72F-89E9F947F3C2">
+			<File Id="System.IO.Hashing.dll" Name="System.IO.Hashing.dll" Source="$(var.doctr_TargetDir)System.IO.Hashing.dll" />
+		</Component>
+		<Component Id="Azure.Security.KeyVault.Secrets.dll" Guid="EBA82DCE-8D41-4EC0-A5D0-0B4E60E5D4BD">
+        <File Id="Azure.Security.KeyVault.Secrets.dll" Name="Azure.Security.KeyVault.Secrets.dll" Source="$(var.doctr_TargetDir)Azure.Security.KeyVault.Secrets.dll" />
+      </Component>
+      <Component Id="Microsoft.Identity.Client.dll" Guid="6B722BAB-BD76-4265-88EE-68B5B8D7A910">
+        <File Id="Microsoft.Identity.Client.dll" Name="Microsoft.Identity.Client.dll" Source="$(var.doctr_TargetDir)Microsoft.Identity.Client.dll" />
+      </Component>
+      <Component Id="Microsoft.Identity.Client.Extensions.Msal.dll" Guid="09A2D7D0-7372-4720-BDEE-B71CD9DE4D38">
+        <File Id="Microsoft.Identity.Client.Extensions.Msal.dll" Name="Microsoft.Identity.Client.Extensions.Msal.dll" Source="$(var.doctr_TargetDir)Microsoft.Identity.Client.Extensions.Msal.dll" />
+      </Component>
+		<Component Id="Microsoft.IdentityModel.Abstractions.dll" Guid="2258A6CE-2CC5-4FFD-84C6-DCA56CC7C11A">
+			<File Id="Microsoft.IdentityModel.Abstractions.dll" Name="Microsoft.IdentityModel.Abstractions.dll" Source="$(var.doctr_TargetDir)Microsoft.IdentityModel.Abstractions.dll" />
+		</Component>
+		<Component Id="System.ClientModel.dll" Guid="C3DB43C1-F0AD-41F3-99D6-67317FD49392">
+			<File Id="System.ClientModel.dll" Name="System.ClientModel.dll" Source="$(var.doctr_TargetDir)System.ClientModel.dll" />
+		</Component>
+	</ComponentGroup>
+  </Fragment>
+</Wix>
