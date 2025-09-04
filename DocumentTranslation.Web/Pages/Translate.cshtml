@@ -1,505 +1,194 @@
 @page
 @model DocumentTranslation.Web.Pages.TranslateModel
-@{
-    ViewData["Title"] = "Document Translation";
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+
+<style>
+/* Keep primary-blue active state for the Files/Folder toggle */
+#modeToggle .btn-check:checked + .btn-outline-secondary,
+#modeToggle .btn-outline-secondary.active {
+    color: #fff;
+    background-color: #0d6efd;
+    border-color: #0d6efd;
 }
+#modeToggle .btn-outline-secondary:hover {
+    color: #fff;
+    background-color: #0b5ed7;
+    border-color: #0b5ed7;
+}
+</style>
 
-<div class="container mt-4">
-    <div class="row justify-content-center">
-        <div class="col-md-8">
-            <div class="card">
-                <div class="card-header bg-primary text-white">
-                    <h3 class="mb-0">
-                        <i class="fas fa-language"></i>
-                        Document Translation
-                    </h3>
+<div class="container py-4">
+
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <div class="alert alert-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>@Model.ErrorMessage</div>
+    }
+    @if (!string.IsNullOrEmpty(Model.Message))
+    {
+        <div class="alert alert-success"><i class="fa-solid fa-circle-check me-2"></i>@Model.Message</div>
+    }
+
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-header bg-primary text-white d-flex align-items-center">
+            <i class="fa-solid fa-language me-2" aria-hidden="true"></i>
+            <h3 class="mb-0">Document Translation</h3>
+        </div>
+
+        <div class="card-body">
+            <form method="post" enctype="multipart/form-data">
+
+                <!-- Dynamic helper (black, default font size) -->
+                <div class="mb-2">
+                    <span id="modeHelp" class="fw-semibold text-dark">Select one or more files.</span>
                 </div>
-                <div class="card-body">
-                    @if (!string.IsNullOrEmpty(Model.Message))
-                    {
-                        <div class="alert alert-success alert-dismissible fade show" role="alert">
-                            <i class="fas fa-check-circle"></i>
-                            @Model.Message
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                    }
 
-                    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
-                    {
-                        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                            <i class="fas fa-exclamation-triangle"></i>
-                            @Model.ErrorMessage
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                    }
+                <!-- Files/Folder toggle -->
+                <div class="mb-2 d-flex align-items-center justify-content-between">
+                    <div id="modeToggle" class="btn-group" role="group" aria-label="Selection mode">
+                        <input type="radio" class="btn-check" name="pickMode" id="modeFiles" value="files" autocomplete="off" checked>
+                        <label class="btn btn-outline-secondary btn-sm" for="modeFiles">Files</label>
 
-                    <form method="post" enctype="multipart/form-data" id="translationForm">
-                        <div class="mb-3">
-                            <label for="UploadedFile" class="form-label">
-                                <i class="fas fa-file-upload"></i>
-                                Select Document to Translate
-                            </label>
-                            <input type="file" class="form-control" asp-for="UploadedFile" 
-                                   accept=".docx,.pdf,.pptx,.xlsx,.txt,.html,.htm,.md" required>
-                            <div class="form-text">
-                                Supported formats: Word (.docx), PDF, PowerPoint (.pptx), Excel (.xlsx), Text (.txt), HTML, Markdown
-                            </div>
-                        </div>
+                        <input type="radio" class="btn-check" name="pickMode" id="modeFolder" value="folder" autocomplete="off">
+                        <label class="btn btn-outline-secondary btn-sm" for="modeFolder">Folder</label>
+                    </div>
+                </div>
 
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label for="SourceLanguage" class="form-label">
-                                        <i class="fas fa-globe"></i>
-                                        Source Language (Optional)
-                                    </label>
-                                    <select class="form-select" asp-for="SourceLanguage">
-                                        <option value="">Auto-detect</option>
-                                        @foreach (var lang in Model.AvailableLanguages)
-                                        {
-                                            <option value="@lang.Code">@lang.Name</option>
-                                        }
-                                    </select>
-                                    <div class="form-text">Leave blank for automatic language detection</div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label for="TargetLanguage" class="form-label">
-                                        <i class="fas fa-flag"></i>
-                                        Target Language *
-                                    </label>
-                                    <select class="form-select" asp-for="TargetLanguage" required>
-                                        @foreach (var lang in Model.AvailableLanguages)
-                                        {
-                                            @if (lang.Code == Model.TargetLanguage)
-                                            {
-                                                <option value="@lang.Code" selected>@lang.Name</option>
-                                            }
-                                            else
-                                            {
-                                                <option value="@lang.Code">@lang.Name</option>
-                                            }
-                                        }
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
+                <div class="mb-3">
+                    <input type="file"
+                           id="fileChooser"
+                           class="form-control"
+                           asp-for="UploadedFiles"
+                           accept=".docx,.pdf,.pptx,.xlsx,.txt,.html,.htm,.md"
+                           multiple>
+                    <small class="form-text text-muted" id="chooserHint">
+                        Supported formats: Word (.docx), PDF, PowerPoint (.pptx), Excel (.xlsx), Text (.txt), HTML, Markdown. Use Ctrl/Shift to select multiple files.
+                    </small>
+                    <span asp-validation-for="UploadedFiles" class="text-danger"></span>
+                </div>
 
-                        <div class="d-grid gap-2">
-                            <button type="submit" class="btn btn-primary btn-lg" id="translateButton">
-                                <span class="btn-text">
-                                    <i class="fas fa-language"></i>
-                                    Translate Document
-                                </span>
-                            </button>
-                        </div>
-                    </form>
-
-                    <!-- Progress Indicator -->
-                    <div id="translationProgress" class="translation-progress">
-                        <div class="progress-content">
-                            <div class="progress-spinner"></div>
-                            <div class="progress-message" id="progressMessage">Starting translation...</div>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar-fill progress-bar-indeterminate" id="progressBar"></div>
-                            </div>
-                            <div class="progress-status" id="progressStatus">Please wait while your document is being translated</div>
-                        </div>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <label asp-for="SourceLanguage" class="form-label">
+                            <i class="fa-solid fa-globe me-1" aria-hidden="true"></i> Source Language (Optional)
+                        </label>
+                        <select asp-for="SourceLanguage" class="form-select">
+                            <option value="">Auto-detect</option>
+                            @foreach (var lang in Model.AvailableLanguages)
+                            {
+                                <option value="@lang.Code">@lang.Name</option>
+                            }
+                        </select>
+                        <small class="form-text text-muted">Leave blank for automatic language detection</small>
                     </div>
 
-                    @if (Model.TranslatedFiles.Any())
-                    {
-                        <div class="mt-4 p-3 bg-light rounded">
-                            <h5><i class="fas fa-download"></i> Download Translated Documents</h5>
-                            
-                            @if (Model.TranslatedFiles.Count == 1)
+                    <div class="col-md-6">
+                        <label asp-for="TargetLanguage" class="form-label">
+                            <i class="fa-solid fa-flag me-1" aria-hidden="true"></i> Target Language *
+                        </label>
+                        <select asp-for="TargetLanguage" class="form-select">
+                            @foreach (var lang in Model.AvailableLanguages)
                             {
-                                <p>Your translated document is ready for download.</p>
-                                <a href="@Url.Page("/Translate", "Download", new { fileName = Model.TranslatedFiles.First() })" class="btn btn-success">
-                                    <i class="fas fa-download"></i>
-                                    Download @Model.TranslatedFiles.First()
-                                </a>
+                                <option value="@lang.Code" selected="@(Model.TargetLanguage == lang.Code)">@lang.Name</option>
                             }
-                            else
-                            {
-                                <p>Your translated documents are ready for download.</p>
-                                <div class="mb-3">
-                                    <a href="@Url.Page("/Translate", "DownloadAll")" class="btn btn-success">
-                                        <i class="fas fa-file-archive"></i>
-                                        Download All Files (ZIP)
-                                    </a>
-                                </div>
-                                
-                                <div class="list-group">
-                                    @foreach (var file in Model.TranslatedFiles)
-                                    {
-                                        <div class="list-group-item d-flex justify-content-between align-items-center">
-                                            <span><i class="fas fa-file"></i> @file</span>
-                                            <a href="@Url.Page("/Translate", "Download", new { fileName = file })" class="btn btn-sm btn-outline-primary">
-                                                <i class="fas fa-download"></i> Download
-                                            </a>
-                                        </div>
-                                    }
-                                </div>
-                            }
-                        </div>
-                    }
+                        </select>
+                    </div>
                 </div>
-            </div>
 
-            <div class="card mt-4">
-                <div class="card-body">
-                    <h5 class="card-title">
-                        <i class="fas fa-info-circle"></i>
-                        How it works
-                    </h5>
-                    <ol>
-                        <li>Upload your document using the form above</li>
-                        <li>Select the target language for translation</li>
-                        <li>Optionally specify the source language (or leave blank for auto-detection)</li>
-                        <li>Click "Translate Document" to start the process</li>
-                        <li>Download your translated document when ready</li>
-                    </ol>
-                    <p class="text-muted mb-0">
-                        <small>
-                            <i class="fas fa-shield-alt"></i>
-                            Your documents are processed securely and temporarily stored only during translation.
-                        </small>
-                    </p>
-                </div>
+                <button type="submit" id="translateBtn" class="btn btn-primary btn-lg w-100 mt-2" aria-label="Translate Document">
+                    <i class="fa-solid fa-language me-2" aria-hidden="true"></i> <span class="btn-label">Translate Document</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card shadow-sm border-0">
+        <div class="card-header d-flex align-items-center">
+            <i class="fa-solid fa-circle-info me-2" aria-hidden="true"></i>
+            <h5 class="mb-0">How it works</h5>
+        </div>
+        <div class="card-body">
+            <ol class="mb-0">
+                <li>Toggle between <strong>"Files"</strong> (default) and <strong>"Folder"</strong> modes to select individual files or an entire folder for upload.</li>
+                <li>Select and upload your document/s using the <strong>"Choose File"</strong> selector.</li>
+                <li>Choose the source language using <strong>"Source Language"</strong>. This defaults to <strong>"Auto Detect"</strong> if no language is specified.</li>
+                <li>Select the target language using <strong>"Target Language"</strong>.</li>
+                <li>Click <strong>"Translate Document"</strong> to begin translation.</li>
+                <li>Depending on file size, type, and content complexity (e.g., images, formatting), translation may take several minutes.</li>
+                <li>Once complete, open or download your translated document/s.</li>
+            </ol>
+            <div class="text-muted small mt-3">
+                <i class="fa-solid fa-shield-halved me-1" aria-hidden="true"></i>
+                Your documents are processed securely and temporarily stored only during translation.
             </div>
         </div>
     </div>
+
+    @if (Model.TranslatedFiles != null && Model.TranslatedFiles.Count > 0)
+    {
+        <hr class="my-4" />
+        <h5>Translated Files</h5>
+        <ul class="list-group">
+            @foreach (var f in Model.TranslatedFiles)
+            {
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span><i class="fa-solid fa-file me-2" aria-hidden="true"></i>@f</span>
+                    <a class="btn btn-sm btn-outline-secondary" href="?handler=Download&fileName=@Uri.EscapeDataString(f)"><i class="fa-solid fa-download me-1" aria-hidden="true"></i>Download</a>
+                </li>
+            }
+        </ul>
+        <a class="btn btn-success mt-3" href="?handler=DownloadAll"><i class="fa-solid fa-file-zipper me-1" aria-hidden="true"></i>Download All as .zip</a>
+    }
 </div>
 
-@section Scripts {
-    <script src="~/lib/microsoft-signalr/signalr.min.js"></script>
-    <script>
-        let connection;
-        let connectionId;
+<script>
+(function() {
+    const chooser = document.getElementById('fileChooser');
+    const modeFiles = document.getElementById('modeFiles');
+    const modeFolder = document.getElementById('modeFolder');
+    const chooserHint  = document.getElementById('chooserHint');
+    const modeHelp     = document.getElementById('modeHelp');
+    const btn          = document.getElementById('translateBtn');
+    const labelSpan    = btn ? btn.querySelector('.btn-label') : null;
 
-        // Initialize SignalR connection
-        async function initializeSignalR() {
-            connection = new signalR.HubConnectionBuilder()
-                .withUrl("/translationProgressHub")
-                .build();
+    function setMode(mode) {
+        if (!chooser) return;
+        if (mode === 'folder') {
+            chooser.removeAttribute('multiple');
+            chooser.setAttribute('webkitdirectory', '');
+            chooserHint.textContent = 'All supported files in the selected folder (and subfolders) will be uploaded.';
+            modeHelp.textContent = 'Select a folder to upload its contents.';
+            chooser.value = '';
+        } else {
+            chooser.setAttribute('multiple', '');
+            chooser.removeAttribute('webkitdirectory');
+            chooserHint.textContent = 'Supported formats: Word (.docx), PDF, PowerPoint (.pptx), Excel (.xlsx), Text (.txt), HTML, Markdown. Use Ctrl/Shift to select multiple files.';
+            modeHelp.textContent = 'Select one or more files.';
+            chooser.value = '';
+        }
+        updateButton();
+    }
 
-            connection.on("StatusUpdate", function (update) {
-                updateProgress(update.message, update.status);
-            });
+    function updateButton() {
+        const filesCount = chooser && chooser.files ? chooser.files.length : 0;
+        const isFolderMode = modeFolder && modeFolder.checked;
+        let text;
 
-            connection.on("TranslationError", function (error) {
-                hideProgress();
-                showError(error.message);
-            });
-
-            connection.on("TranslationComplete", function (result) {
-                console.log("TranslationComplete received:", result);
-                hideProgress();
-                showSuccess(result.message || 'Translation completed successfully!');
-                
-                // Instead of reloading, show download section dynamically
-                if (result.files && result.files.length > 0) {
-                    console.log("Showing download section for files:", result.files);
-                    showDownloadSection(result.files);
-                } else {
-                    console.log("No files returned, will reload page");
-                    // If no files returned, reload after a delay to check server state
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
-                }
-            });
-
-            try {
-                await connection.start();
-                connectionId = connection.connectionId;
-                console.log("SignalR Connected with ID:", connectionId);
-            } catch (err) {
-                console.error("SignalR Connection Error:", err);
-            }
+        if (isFolderMode && filesCount > 0) {
+            text = 'Translate Folder';
+        } else if (!isFolderMode && filesCount > 1) {
+            text = 'Translate Documents';
+        } else {
+            text = 'Translate Document';
         }
 
-        // Show progress indicator
-        function showProgress() {
-            document.getElementById('translationProgress').classList.add('show');
-            document.getElementById('translateButton').classList.add('btn-loading');
-            document.getElementById('translateButton').disabled = true;
-        }
+        if (labelSpan) labelSpan.textContent = text;
+        if (btn) btn.setAttribute('aria-label', text + (filesCount ? ` (${filesCount} selected)` : ''));
+    }
 
-        // Hide progress indicator
-        function hideProgress() {
-            document.getElementById('translationProgress').classList.remove('show');
-            document.getElementById('translateButton').classList.remove('btn-loading');
-            document.getElementById('translateButton').disabled = false;
-        }
+    if (modeFiles) modeFiles.addEventListener('change', () => setMode('files'));
+    if (modeFolder) modeFolder.addEventListener('change', () => setMode('folder'));
+    if (chooser) chooser.addEventListener('change', updateButton);
 
-        // Update progress message
-        function updateProgress(message, status) {
-            document.getElementById('progressMessage').textContent = message;
-            // Use more appropriate status names for display
-            let displayStatus = status;
-            if (status === 'NotStarted' || status === 'InProgress') {
-                displayStatus = 'Translating';
-            }
-            document.getElementById('progressStatus').textContent = `Status: ${displayStatus}`;
-        }
-
-        // Show success message
-        function showSuccess(message) {
-            const alertHtml = `
-                <div class="alert alert-success alert-dismissible fade show" role="alert">
-                    <i class="fas fa-check-circle"></i>
-                    ${message}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-            `;
-            insertAlert(alertHtml);
-        }
-
-        // Show error message
-        function showError(message) {
-            const alertHtml = `
-                <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                    <i class="fas fa-exclamation-triangle"></i>
-                    ${message}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-            `;
-            insertAlert(alertHtml);
-        }
-
-        // Show download section with translated files
-        function showDownloadSection(files) {
-            // Remove existing download section if any
-            const existingSection = document.querySelector('.download-section');
-            if (existingSection) {
-                existingSection.remove();
-            }
-            
-            // Create download section HTML
-            let downloadHtml = `
-                <div class="mt-4 p-3 bg-light rounded download-section">
-                    <h5><i class="fas fa-download"></i> Download Translated Documents</h5>
-            `;
-            
-            if (files.length === 1) {
-                downloadHtml += `
-                    <p>Your translated document is ready for download.</p>
-                    <a href="/Translate?handler=Download&fileName=${encodeURIComponent(files[0])}" class="btn btn-success">
-                        <i class="fas fa-download"></i>
-                        Download ${files[0]}
-                    </a>
-                `;
-            } else {
-                downloadHtml += `
-                    <p>Your translated documents are ready for download.</p>
-                    <div class="mb-3">
-                        <a href="/Translate?handler=DownloadAll" class="btn btn-success">
-                            <i class="fas fa-file-archive"></i>
-                            Download All Files (ZIP)
-                        </a>
-                    </div>
-                    <div class="list-group">
-                `;
-                
-                files.forEach(file => {
-                    downloadHtml += `
-                        <div class="list-group-item d-flex justify-content-between align-items-center">
-                            <span><i class="fas fa-file"></i> ${file}</span>
-                            <a href="/Translate?handler=Download&fileName=${encodeURIComponent(file)}" class="btn btn-sm btn-outline-primary">
-                                <i class="fas fa-download"></i> Download
-                            </a>
-                        </div>
-                    `;
-                });
-                
-                downloadHtml += `</div>`;
-            }
-            
-            downloadHtml += `</div>`;
-            
-            // Insert download section after the form
-            const form = document.getElementById('translationForm');
-            form.insertAdjacentHTML('afterend', downloadHtml);
-        }
-
-        // Insert alert into the page
-        function insertAlert(alertHtml) {
-            const cardBody = document.querySelector('.card-body');
-            const form = document.getElementById('translationForm');
-            form.insertAdjacentHTML('beforebegin', alertHtml);
-            
-            // Auto-dismiss after 5 seconds
-            setTimeout(function() {
-                const alert = cardBody.querySelector('.alert');
-                if (alert) {
-                    alert.remove();
-                }
-            }, 5000);
-        }
-
-        // Handle form submission
-        document.getElementById('translationForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const form = e.target;
-            
-            // Debug: Log the actual form HTML
-            console.log('Form HTML:', form.innerHTML);
-            
-            // Get form values - try multiple selectors to find the elements
-            const fileInput = form.querySelector('input[type="file"]') || 
-                             form.querySelector('input[name="UploadedFile"]') ||
-                             form.querySelector('#UploadedFile');
-            
-            const targetLanguageSelect = form.querySelector('select[name="TargetLanguage"]') ||
-                                        form.querySelector('#TargetLanguage') ||
-                                        form.querySelector('select[required]');
-            
-            const sourceLanguageSelect = form.querySelector('select[name="SourceLanguage"]') ||
-                                        form.querySelector('#SourceLanguage') ||
-                                        form.querySelector('select:not([required])');
-            
-            // Debug logging
-            console.log('Form elements found:');
-            console.log('File input:', fileInput);
-            console.log('Target language select:', targetLanguageSelect);
-            console.log('Source language select:', sourceLanguageSelect);
-            
-            if (targetLanguageSelect) {
-                console.log('Target language element details:');
-                console.log('- tagName:', targetLanguageSelect.tagName);
-                console.log('- name:', targetLanguageSelect.name);
-                console.log('- id:', targetLanguageSelect.id);
-                console.log('- value:', targetLanguageSelect.value);
-                console.log('- selectedIndex:', targetLanguageSelect.selectedIndex);
-                console.log('- options length:', targetLanguageSelect.options.length);
-                if (targetLanguageSelect.options.length > 0) {
-                    console.log('- selected option:', targetLanguageSelect.options[targetLanguageSelect.selectedIndex]);
-                    console.log('- selected option value:', targetLanguageSelect.options[targetLanguageSelect.selectedIndex]?.value);
-                }
-            }
-            
-            // Also log all form elements to debug
-            console.log('All form elements:');
-            const allInputs = form.querySelectorAll('input, select');
-            allInputs.forEach((element, index) => {
-                console.log(`Element ${index}:`, {
-                    tagName: element.tagName,
-                    type: element.type,
-                    name: element.name,
-                    id: element.id,
-                    value: element.value,
-                    required: element.required
-                });
-            });
-            
-            // Validate required fields
-            if (!fileInput) {
-                showError('File input field not found.');
-                return;
-            }
-            
-            if (!targetLanguageSelect) {
-                showError('Target language field not found.');
-                return;
-            }
-            
-            if (!fileInput.files || !fileInput.files[0]) {
-                showError('Please select a file to translate.');
-                return;
-            }
-            
-            if (!targetLanguageSelect.value || targetLanguageSelect.value === '') {
-                showError('Please select a target language for translation.');
-                return;
-            }
-            
-            // Create FormData manually with the correct values
-            const formData = new FormData();
-            
-            // Add the file
-            formData.append('file', fileInput.files[0]);
-            
-            // Add target language
-            formData.append('targetLanguage', targetLanguageSelect.value);
-            
-            // Add source language if selected
-            if (sourceLanguageSelect && sourceLanguageSelect.value && sourceLanguageSelect.value !== '') {
-                formData.append('sourceLanguage', sourceLanguageSelect.value);
-            }
-            
-            // Debug: Log final FormData contents
-            console.log('Final FormData contents being sent to API:');
-            for (let [key, value] of formData.entries()) {
-                console.log(key, ':', value);
-                if (value instanceof File) {
-                    console.log(`  File details - name: ${value.name}, size: ${value.size}, type: ${value.type}`);
-                }
-            }
-
-            try {
-                showProgress();
-                updateProgress('Uploading document to Azure...', 'Translating');
-
-                // Join the SignalR group for this translation
-                if (connection && connectionId) {
-                    await connection.invoke("JoinTranslationGroup", connectionId);
-                    // Add connectionId to form data for the server to send updates
-                    formData.append('connectionId', connectionId);
-                }
-
-                const response = await fetch('/api/translation/translate', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(errorText || 'Translation failed');
-                }
-
-                const result = await response.json();
-                
-                // Don't hide progress here - let SignalR handle it when translation is complete
-                updateProgress('Translation submitted successfully. Processing document...', 'InProgress');
-
-            } catch (error) {
-                hideProgress();
-                showError(`Translation failed: ${error.message}`);
-                
-                // Leave the SignalR group on error
-                if (connection && connectionId) {
-                    await connection.invoke("LeaveTranslationGroup", connectionId);
-                }
-            }
-        });
-
-        // File validation
-        document.querySelector('input[type="file"]').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (file) {
-                const maxSize = 50 * 1024 * 1024; // 50MB
-                if (file.size > maxSize) {
-                    alert('File size must be less than 50MB');
-                    e.target.value = '';
-                    return;
-                }
-            }
-        });
-
-        // Initialize SignalR when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeSignalR();
-        });
-
-        // Clean up SignalR connection when page unloads
-        window.addEventListener('beforeunload', function() {
-            if (connection) {
-                connection.stop();
-            }
-        });
-    </script>
-}
+    document.addEventListener('DOMContentLoaded', () => setMode('files'));
+})();
+</script>

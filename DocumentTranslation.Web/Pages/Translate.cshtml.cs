@@ -1,3 +1,4 @@
+
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.IO.Compression;
@@ -24,8 +25,9 @@ namespace DocumentTranslation.Web.Pages
             _translationBusiness = translationBusiness;
         }
 
+        // CHANGED: support multiple files
         [BindProperty]
-        public IFormFile? UploadedFile { get; set; }
+        public List<IFormFile?> UploadedFiles { get; set; } = new();
 
         [BindProperty]
         public string TargetLanguage { get; set; } = "fr";
@@ -49,9 +51,10 @@ namespace DocumentTranslation.Web.Pages
         {
             await LoadAvailableLanguagesAsync();
 
-            if (UploadedFile == null || UploadedFile.Length == 0)
+            // Validate files
+            if (UploadedFiles == null || UploadedFiles.Count == 0 || !UploadedFiles.Any(f => f is not null && f.Length > 0))
             {
-                ErrorMessage = "Please select a file to upload.";
+                ErrorMessage = "Please select at least one file to upload.";
                 return Page();
             }
 
@@ -73,23 +76,46 @@ namespace DocumentTranslation.Web.Pages
                     Directory.CreateDirectory(uploadsPath);
                 }
 
-                // Save uploaded file
-                var fileName = Path.GetFileName(UploadedFile.FileName);
-                var filePath = Path.Combine(uploadsPath, fileName);
-                
-                using (var stream = new FileStream(filePath, FileMode.Create))
-                {
-                    await UploadedFile.CopyToAsync(stream);
-                }
-
-                // Create output directory
+                // Create/clean output directory
                 var outputPath = Path.Combine(uploadsPath, "output");
                 if (Directory.Exists(outputPath))
                 {
-                    // Clean up existing files
                     Directory.Delete(outputPath, true);
                 }
                 Directory.CreateDirectory(outputPath);
+
+                // Save uploaded files (flattened). Optionally filter extensions server-side.
+                var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ".docx",".pdf",".pptx",".xlsx",".txt",".html",".htm",".md"
+                };
+
+                var filesToTranslate = new List<string>();
+                foreach (var file in UploadedFiles.Where(f => f is not null && f.Length > 0)!)
+                {
+                    var ext = Path.GetExtension(file!.FileName);
+                    if (!allowed.Contains(ext))
+                    {
+                        _logger.LogWarning("Skipping unsupported file: {File}", file.FileName);
+                        continue;
+                    }
+
+                    var safeName = Path.GetFileName(file.FileName);
+                    var filePath = Path.Combine(uploadsPath, safeName);
+
+                    using (var stream = new FileStream(filePath, FileMode.Create))
+                    {
+                        await file.CopyToAsync(stream);
+                    }
+
+                    filesToTranslate.Add(filePath);
+                }
+
+                if (filesToTranslate.Count == 0)
+                {
+                    ErrorMessage = "No supported files were selected.";
+                    return Page();
+                }
 
                 // Setup event handlers for translation progress
                 _translationBusiness.OnStatusUpdate += (sender, status) =>
@@ -102,12 +128,10 @@ namespace DocumentTranslation.Web.Pages
                     _logger.LogError($"Translation errors: {errors}");
                 };
 
-                // Run translation using the service library
-                var filesToTranslate = new List<string> { filePath };
                 var targetLanguages = new string[] { TargetLanguage };
                 var fromLanguage = string.IsNullOrEmpty(SourceLanguage) ? null : SourceLanguage;
 
-                // Use the output path directly as the target folder to avoid file copying
+                // Run translation using the service library for all files
                 await _translationBusiness.RunAsync(
                     filestotranslate: filesToTranslate,
                     fromlanguage: fromLanguage,
@@ -115,21 +139,18 @@ namespace DocumentTranslation.Web.Pages
                     glossaryfiles: null,
                     targetFolder: outputPath);
 
-                Message = $"Translation completed successfully! File translated to {TargetLanguage}.";
-                
+                Message = $"Translation completed successfully! {filesToTranslate.Count} file(s) translated to {TargetLanguage}.";
+
                 // Get list of translated files directly from output folder
                 if (Directory.Exists(outputPath))
                 {
-                    _logger.LogInformation($"Output folder: {outputPath}");
                     var files = Directory.GetFiles(outputPath);
-                    _logger.LogInformation($"Found {files.Length} translated files");
-                    
                     TranslatedFiles = files.Select(f => Path.GetFileName(f)).ToList();
-                    _logger.LogInformation($"Translated files: {string.Join(", ", TranslatedFiles)}");
+                    _logger.LogInformation("Translated files: {Files}", string.Join(", ", TranslatedFiles));
                 }
                 else
                 {
-                    _logger.LogWarning($"Output folder {outputPath} does not exist");
+                    _logger.LogWarning("Output folder {OutputPath} does not exist", outputPath);
                 }
             }
             catch (DocumentTranslationService.Core.DocumentTranslationService.CredentialsException ex)
@@ -151,7 +172,7 @@ namespace DocumentTranslation.Web.Pages
             try
             {
                 await _translationService.InitializeAsync();
-                
+
                 AvailableLanguages.Clear();
                 foreach (var lang in _translationService.Languages.Values)
                 {
@@ -164,7 +185,7 @@ namespace DocumentTranslation.Web.Pages
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to load available languages, using default list");
-                
+
                 // Fallback to a default list if service is not configured
                 AvailableLanguages = new List<LanguageOption>
                 {
@@ -195,7 +216,7 @@ namespace DocumentTranslation.Web.Pages
             // Security check - ensure the file is within the output directory
             var fullPath = Path.GetFullPath(filePath);
             var fullOutputPath = Path.GetFullPath(outputPath);
-            
+
             if (!fullPath.StartsWith(fullOutputPath))
             {
                 return NotFound();
@@ -220,7 +241,7 @@ namespace DocumentTranslation.Web.Pages
         public async Task<IActionResult> OnGetDownloadAllAsync()
         {
             var outputPath = Path.Combine(_environment.WebRootPath, "uploads", "output");
-            
+
             if (!Directory.Exists(outputPath))
             {
                 return NotFound();
@@ -241,13 +262,13 @@ namespace DocumentTranslation.Web.Pages
 
             // If multiple files, create a zip archive
             var zipStream = new MemoryStream();
-            using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create, true))
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
             {
                 foreach (var file in files)
                 {
                     var fileName = Path.GetFileName(file);
                     var entry = archive.CreateEntry(fileName);
-                    
+
                     using var entryStream = entry.Open();
                     using var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read);
                     await fileStream.CopyToAsync(entryStream);
@@ -290,30 +311,33 @@ namespace DocumentTranslation.Web.Pages
                 }
                 catch (IOException ex)
                 {
-                    // Check if this is a file access/locking issue that might resolve with a retry
                     bool isRetryableError = ex.Message.Contains("being used by another process") ||
-                                          ex.Message.Contains("cannot access the file") ||
-                                          ex.HResult == -2147024864 || // ERROR_SHARING_VIOLATION
-                                          ex.HResult == -2147024891;   // ERROR_ACCESS_DENIED
-                    
+                                            ex.Message.Contains("cannot access the file") ||
+                                            ex.HResult == -2147024864 || // ERROR_SHARING_VIOLATION
+                                            ex.HResult == -2147024891;   // ERROR_ACCESS_DENIED
+
                     if (!isRetryableError || retry == maxRetries - 1)
                     {
-                        _logger.LogError($"Failed to copy file {sourceFile} after {maxRetries} retries: {ex.Message}");
-                        throw; // Re-throw on final attempt or non-retryable error
+                        _logger.LogError("Failed to copy file {Source} after {Retries} retries: {Message}",
+                            sourceFile, maxRetries, ex.Message);
+                        throw;
                     }
-                    
-                    _logger.LogWarning($"File {sourceFile} is locked (attempt {retry + 1}/{maxRetries}), retrying in {(retry + 1) * 1000}ms. Error: {ex.Message}");
-                    await Task.Delay((retry + 1) * 1000); // Longer delays: 1s, 2s, 3s, 4s, 5s
+
+                    _logger.LogWarning("File {Source} is locked (attempt {Attempt}/{Max}), retrying.",
+                        sourceFile, retry + 1, maxRetries);
+                    await Task.Delay((retry + 1) * 1000);
                 }
                 catch (UnauthorizedAccessException ex)
                 {
                     if (retry == maxRetries - 1)
                     {
-                        _logger.LogError($"Failed to copy file {sourceFile} after {maxRetries} retries due to access denied: {ex.Message}");
+                        _logger.LogError("Failed to copy file {Source} after {Retries} retries due to access denied: {Message}",
+                            sourceFile, maxRetries, ex.Message);
                         throw;
                     }
-                    
-                    _logger.LogWarning($"File {sourceFile} access denied (attempt {retry + 1}/{maxRetries}), retrying in {(retry + 1) * 1000}ms");
+
+                    _logger.LogWarning("File {Source} access denied (attempt {Attempt}/{Max}), retrying.",
+                        sourceFile, retry + 1, maxRetries);
                     await Task.Delay((retry + 1) * 1000);
                 }
             }
@@ -322,10 +346,10 @@ namespace DocumentTranslation.Web.Pages
         private async Task CopyFileWithStreamAsync(string sourceFile, string destinationFile)
         {
             const int bufferSize = 1024 * 1024; // 1MB buffer
-            
+
             using var sourceStream = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, FileOptions.SequentialScan);
             using var destinationStream = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.SequentialScan);
-            
+
             await sourceStream.CopyToAsync(destinationStream);
         }
     }

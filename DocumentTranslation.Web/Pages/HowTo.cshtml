@@ -1,0 +1,59 @@
+@page
+@model HowToModel
+@{
+    ViewData["Title"] = "How To";
+}
+
+<h1>@ViewData["Title"]</h1>
+
+<p class="lead">This guide explains how to use the DeCA Document Translator.</p>
+
+<h2>Supported file types</h2>
+<p>The translator accepts the following formats:</p>
+<ul>
+    <li>Microsoft Office: <code>.docx</code>, <code>.pptx</code>, <code>.xlsx</code></li>
+    <li>PDF: <code>.pdf</code></li>
+    <li>Text/Markup: <code>.txt</code>, <code>.html</code>, <code>.htm</code>, <code>.md</code></li>
+</ul>
+
+<h2>Upload options</h2>
+<p>The upload area begins with a small toggle to pick between single/multiple files or folder:</p>
+<ul>
+    <li><strong>Files</strong> (default, blue highlight when active) — select one or more individual files from a folder.</li>
+    <li><strong>Folder</strong> — select a folder; all supported files inside that folder <em>and its subfolders</em> will be included.</li>
+</ul>
+
+<h2>Translate Document/s</h2>
+<ol>
+    <li>Open the <strong>Translate</strong> tab.</li>
+    <li>Choose an upload mode: <strong>Files</strong> or <strong>Folder</strong>.</li>
+    <li>Click the file chooser and make your document selection.
+        <ul>
+            <li>In <strong>Files</strong> mode you can select multiple files from the same directory.</li>
+            <li>In <strong>Folder</strong> mode the app will include all supported files recursively.</li>
+        </ul>
+    </li>
+    <li>(Optional) Set the <strong>Source Language</strong>. Leave blank for <strong>Auto‑detect</strong>.</li>
+    <li>Select the required <strong>Target Language</strong>.</li>
+    <li>Click <strong>Translate</strong>.
+        <ul>
+            <li>The button label adapts: <em>Translate Document</em>, <em>Translate Documents</em>, or <em>Translate Folder</em>, depending on your selection.</li>
+        </ul>
+    </li>
+    <li>When finished, the page lists the translated files. You can download individual files or use <strong>Download All as .zip</strong> when available.</li>
+</ol>
+
+<h2>Notes & tips</h2>
+<ul>
+    <li>Very large batches or files can take longer to upload and process.</li>
+    <li>If some items aren’t accepted, check the file extensions against the supported list above.</li>
+    <li>Folder upload relies on browser support for directory selection (supported in Microsoft Edge/Chrome-based browsers).</li>
+</ul>
+
+<h2>Security reminders</h2>
+<ul>
+    <li>By using this service, you agree to comply with all relevant policies and guidelines as stated on the <strong>Privacy</strong> page.</li>
+    <li>Only upload documents approved for processing in this environment.</li>
+    <li>Do not include PII, PHI, or sensitive operational data unless explicitly authorized.</li>
+    <li>Documents are processed securely and stored only for the duration of translation.</li>
+</ul>
