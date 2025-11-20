@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.Authorization;
 
 namespace DocumentTranslation.Web.Hubs
 {
+    [Authorize(Policy = "RequireTranslatorUser")]
     public class TranslationProgressHub : Hub
     {
         public async Task JoinTranslationGroup(string connectionId)

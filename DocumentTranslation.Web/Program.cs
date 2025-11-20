@@ -4,29 +4,84 @@ using DocumentTranslation.Web.Models;
 using DocumentTranslationService.Core;
 using DocumentTranslation.Web.Hubs;
 
+using Microsoft.Identity.Web;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-builder.Services.AddRazorPages();
+// ------------------------------------------------------------------
+// DATA PROTECTION (fix antiforgery decrypt issues across restarts)
+// ------------------------------------------------------------------
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/home/data-protection"))
+    .SetApplicationName("DeCA-Document-Translator");
+
+// ------------------------------------------------------------------
+// RAZOR + MICROSOFT IDENTITY UI
+// ------------------------------------------------------------------
+builder.Services
+    .AddRazorPages()
+    .AddMicrosoftIdentityUI();
+
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 
-// Configure DocumentTranslation settings
+// ------------------------------------------------------------------
+// AUTHENTICATION (single registration to avoid duplicate Cookies scheme)
+// Use the helper extension provided by Microsoft.Identity.Web.
+// This internally registers the cookie & OpenIdConnect schemes once.
+// ------------------------------------------------------------------
+var azureAdSection = builder.Configuration.GetSection("AzureAd");
+if (azureAdSection.Exists())
+{
+    // This replaces manual AddAuthentication + AddMicrosoftIdentityWebApp calls.
+    builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd");
+}
+
+// (OPTIONAL) If you need custom cookie settings, use PostConfigure to avoid re‑adding the scheme.
+builder.Services.PostConfigure<CookieAuthenticationOptions>(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme, opts =>
+{
+    opts.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    opts.SlidingExpiration = true;
+    opts.ExpireTimeSpan = TimeSpan.FromMinutes(60);
+});
+
+// ------------------------------------------------------------------
+// AUTHORIZATION
+// Temporarily remove the global fallback during debugging so unauthenticated
+// requests (e.g., static assets or first visit) don’t trigger multiple redirects.
+// Re‑enable once stable.
+// ------------------------------------------------------------------
+builder.Services.AddAuthorization(options =>
+{
+    // Commented out fallback for now:
+    // options.FallbackPolicy = new AuthorizationPolicyBuilder()
+    //     .RequireAuthenticatedUser()
+    //     .Build();
+
+    options.AddPolicy("RequireTranslatorAdmin", p => p.RequireRole("Translator.Admin"));
+    options.AddPolicy("RequireTranslatorUser", p => p.RequireRole("Translator.User"));
+});
+
+// ------------------------------------------------------------------
+// DOCUMENT TRANSLATION OPTIONS
+// ------------------------------------------------------------------
 builder.Services.Configure<DocumentTranslationOptions>(
     builder.Configuration.GetSection("DocumentTranslation"));
 
-// Register DocumentTranslation services
-builder.Services.AddSingleton<DocumentTranslationService.Core.DocumentTranslationService>(serviceProvider =>
+builder.Services.AddSingleton<DocumentTranslationService.Core.DocumentTranslationService>(sp =>
 {
-    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<DocumentTranslationOptions>>().Value;
-    
-    // Add debug logging to see what values we're getting
+    var options = sp.GetRequiredService<
+        Microsoft.Extensions.Options.IOptions<DocumentTranslationOptions>>().Value;
+
     Console.WriteLine($"[DEBUG] AzureResourceName: {options.AzureResourceName}");
     Console.WriteLine($"[DEBUG] SubscriptionKey: {(string.IsNullOrEmpty(options.SubscriptionKey) ? "EMPTY" : "***SET***")}");
     Console.WriteLine($"[DEBUG] AzureRegion: {options.AzureRegion}");
     Console.WriteLine($"[DEBUG] TextTransEndpoint: {options.TextTransEndpoint}");
     Console.WriteLine($"[DEBUG] StorageConnectionString: {(string.IsNullOrEmpty(options.ConnectionStrings.StorageConnectionString) ? "EMPTY" : "***SET***")}");
-    
+
     return new DocumentTranslationService.Core.DocumentTranslationService(
         options.SubscriptionKey,
         options.AzureResourceName,
@@ -39,47 +94,85 @@ builder.Services.AddSingleton<DocumentTranslationService.Core.DocumentTranslatio
     };
 });
 
-builder.Services.AddScoped<DocumentTranslationBusiness>(serviceProvider =>
+builder.Services.AddScoped<DocumentTranslationBusiness>(sp =>
 {
-    var translationService = serviceProvider.GetRequiredService<DocumentTranslationService.Core.DocumentTranslationService>();
-    return new DocumentTranslationBusiness(translationService);
+    var svc = sp.GetRequiredService<DocumentTranslationService.Core.DocumentTranslationService>();
+    return new DocumentTranslationBusiness(svc);
 });
 
-// Configure file upload limits
-builder.Services.Configure<IISServerOptions>(options =>
+// ------------------------------------------------------------------
+// FILE UPLOAD LIMITS
+// ------------------------------------------------------------------
+builder.Services.Configure<IISServerOptions>(o =>
 {
-    options.MaxRequestBodySize = 100 * 1024 * 1024; // 100MB
+    o.MaxRequestBodySize = 100 * 1024 * 1024;
+});
+builder.Services.Configure<FormOptions>(o =>
+{
+    o.MultipartBodyLengthLimit = 100 * 1024 * 1024;
+    o.ValueLengthLimit = int.MaxValue;
+    o.MultipartHeadersLengthLimit = int.MaxValue;
 });
 
-builder.Services.Configure<FormOptions>(options =>
-{
-    options.MultipartBodyLengthLimit = 100 * 1024 * 1024; // 100MB
-    options.ValueLengthLimit = int.MaxValue;
-    options.MultipartHeadersLengthLimit = int.MaxValue;
-});
-
+// ------------------------------------------------------------------
+// BUILD APP
+// ------------------------------------------------------------------
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
-app.UseStaticFiles();
+// ------------------------------------------------------------------
+// FORWARDED HEADERS (apply options explicitly)
+// ------------------------------------------------------------------
+var fwd = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor |
+                       ForwardedHeaders.XForwardedProto |
+                       ForwardedHeaders.XForwardedHost
+};
+fwd.KnownNetworks.Clear();
+fwd.KnownProxies.Clear();
+app.UseForwardedHeaders(fwd);
 
+// Consider disabling HTTPS redirection inside container to remove “Failed to determine https port”
+// if Azure Front End already terminates TLS. Uncomment only if required:
+// app.UseHttpsRedirection();
+
+app.UseStaticFiles();
 app.UseRouting();
 
-app.UseAuthorization();
+if (azureAdSection.Exists())
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
 
+// OPTIONAL manual endpoints (can remove later)
+app.MapGet("/signin", async ctx =>
+{
+    // Single challenge endpoint for manual sign-in if needed
+    await ctx.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme,
+        new Microsoft.AspNetCore.Authentication.AuthenticationProperties { RedirectUri = "/" });
+});
+
+app.MapGet("/signout", async ctx =>
+{
+    await ctx.SignOutAsync(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+    ctx.Response.Redirect("/Account/SignedOut");
+});
+
+// Health probe
+app.MapGet("/health", () => Results.Ok("healthy"));
+
+// Endpoints
 app.MapRazorPages();
 app.MapControllers();
-app.MapHub<TranslationProgressHub>("/translationProgressHub");
+app.MapHub<TranslationProgressHub>("/translationProgressHub"); // remove .RequireAuthorization() during debugging if needed
 
 app.Run();
 
-// Make Program class accessible for testing
 public partial class Program { }

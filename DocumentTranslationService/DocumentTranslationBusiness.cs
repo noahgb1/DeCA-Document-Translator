@@ -1,4 +1,4 @@
-﻿using Azure.AI.Translation.Document;
+﻿﻿using Azure.AI.Translation.Document;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
@@ -17,172 +17,183 @@ namespace DocumentTranslationService.Core
         #region Properties
         public DocumentTranslationService TranslationService { get; }
 
-        /// <summary>
-        /// Can retrieve the final target folder here
-        /// </summary>
+        /// <summary>Final target folder where translated files were placed.</summary>
         public string TargetFolder { get; private set; }
 
-        /// <summary>
-        /// Prevent deletion of storage container. For debugging.
-        /// </summary>
+        /// <summary>Prevent deletion of storage containers (debugging).</summary>
         public bool Nodelete { get; set; } = false;
 
-        /// <summary>
-        /// Fires when errors were encountered in the translation run
-        /// The message is a tab-separated list of files names and the error message and code returned from server
-        /// </summary>
+        /// <summary>Indicates overall run success (at least one translated file downloaded).</summary>
+        public bool LastRunSuccessful { get; private set; }
+
+        /// <summary>Reason for failure or early termination (null if successful).</summary>
+        public string? LastRunFailureReason { get; private set; }
+
         public event EventHandler<string> OnThereWereErrors;
-
-        /// <summary>
-        /// Fires when final results are available;
-        /// Returns the sum of characters translated.
-        /// </summary>
         public event EventHandler<long> OnFinalResults;
-
-        /// <summary>
-        /// Fires during a translation run when there is an updated status. Approximately once per second. 
-        /// </summary>
         public event EventHandler<StatusResponse> OnStatusUpdate;
-
-        /// <summary>
-        /// Fires when the translated files completed downloading. Maybe before the Run method exits, due to necessary cleanup work. 
-        /// Returns count and total size of the download.
-        /// </summary>
         public event EventHandler<(int, long)> OnDownloadComplete;
-
-        /// <summary>
-        /// Fires when the source files start uploading.  
-        /// Returns count and total size of the download.
-        /// </summary>
         public event EventHandler OnUploadStart;
-
-
-        /// <summary>
-        /// Fires when the source files completed uploading.  
-        /// Returns count and total size of the download.
-        /// </summary>
         public event EventHandler<(int, long)> OnUploadComplete;
-
-        /// <summary>
-        /// Fires if there were files listed to translate that were discarded.
-        /// </summary>
         public event EventHandler<List<string>> OnFilesDiscarded;
-
-        /// <summary>
-        /// Fires if there were glossaries listed that were discarded.
-        /// </summary>
         public event EventHandler<List<string>> OnGlossariesDiscarded;
-
         public event EventHandler<string> OnContainerCreationFailure;
-
-        /// <summary>
-        /// Fires if the file could not be read or written.
-        /// <para>File name</para>
-        /// </summary>
         public event EventHandler<string> OnFileReadWriteError;
-
-        /// <summary>
-        /// Fires each time there is a status pull with a response from the service. 
-        /// The argument is the http status of the status request
-        /// </summary>
         public event EventHandler<int> OnHeartBeat;
 
         private readonly Logger logger = new();
-
-        /// <summary>
-        /// Holds the files used as glossary.
-        /// </summary>
         private Glossary glossary;
-
         #endregion Properties
 
-        /// <summary>
-        /// Constructor
-        /// </summary>
-        /// <param name="documentTranslationService"></param>
         public DocumentTranslationBusiness(DocumentTranslationService documentTranslationService)
         {
             TranslationService = documentTranslationService;
         }
 
         /// <summary>
-        /// Perform a translation of a set of files using the TranslationService passed in the Constructor.
+        /// Perform a translation of a set of files.
+        /// Sets LastRunSuccessful / LastRunFailureReason instead of throwing for most early exits.
         /// </summary>
-        /// <param name="filestotranslate">A list of files to translate. Can be a single file or a single directory.</param>
-        /// <param name="fromlanguage">A single source language. Can be null.</param>
-        /// <param name="tolanguage">A single target language.</param>
-        /// <param name="glossaryfiles">The glossary files.</param>
-        /// <returns></returns>
-        public async Task RunAsync(List<string> filestotranslate, string fromlanguage, string[] tolanguages, List<string> glossaryfiles = null, string targetFolder = null)
+        public async Task RunAsync(List<string> filestotranslate,
+                                   string fromlanguage,
+                                   string[] tolanguages,
+                                   List<string> glossaryfiles = null,
+                                   string targetFolder = null)
         {
+            LastRunSuccessful = false;
+            LastRunFailureReason = null;
+
             Stopwatch stopwatch = new();
             stopwatch.Start();
             logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Translation run started");
-            if (filestotranslate.Count == 0) throw new ArgumentNullException(nameof(filestotranslate), "No files to translate.");
+
+            if (filestotranslate is null || filestotranslate.Count == 0)
+            {
+                LastRunFailureReason = "No files to translate.";
+                return;
+            }
+
             Task initialize = TranslationService.InitializeAsync();
 
-            #region Build the list of files to translate
+            #region Build source file list
             List<string> sourcefiles = new();
             foreach (string filename in filestotranslate)
             {
-                if ((File.GetAttributes(filename) & FileAttributes.Directory) == FileAttributes.Directory)
-                    foreach (var file in Directory.EnumerateFiles(filename))
-                        sourcefiles.Add(file);
-                else sourcefiles.Add(filename);
+                try
+                {
+                    if ((File.GetAttributes(filename) & FileAttributes.Directory) == FileAttributes.Directory)
+                    {
+                        foreach (var file in Directory.EnumerateFiles(filename))
+                            sourcefiles.Add(file);
+                    }
+                    else
+                    {
+                        sourcefiles.Add(filename);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LastRunFailureReason = $"Accessing file or directory failed: {filename} - {ex.Message}";
+                    return;
+                }
             }
-
-            await initialize;
+            try
+            {
+                await initialize;
+            }
+            catch (Exception ex)
+            {
+                LastRunFailureReason = $"Initialization failed: {ex.Message}";
+                return;
+            }
             #endregion
 
             #region Parameter checking
-            if (TranslationService.Extensions.Count == 0)
-                throw new ArgumentNullException(nameof(TranslationService.Extensions), "List of translatable extensions cannot be null.");
+            if (TranslationService.Extensions == null || TranslationService.Extensions.Count == 0)
+            {
+                LastRunFailureReason = "List of translatable extensions is empty.";
+                return;
+            }
+
             List<string> discards;
             (sourcefiles, discards) = FilterByExtension(sourcefiles, TranslationService.Extensions);
-            if (discards is not null)
+
+            if (discards is not null && discards.Count > 0)
             {
                 foreach (string fileName in discards)
-                {
-                    logger.WriteLine($"Discarded due to invalid file format for translation: {fileName}");
-                }
-                if ((OnFilesDiscarded is not null) && (discards.Count > 0)) OnFilesDiscarded(this, discards);
+                    logger.WriteLine($"Discarded due to invalid file format: {fileName}");
+                OnFilesDiscarded?.Invoke(this, discards);
             }
+
             if (sourcefiles.Count == 0)
             {
-                //There is nothing to translate
-                logger.WriteLine("Nothing left to translate.");
-                throw new ArgumentNullException(nameof(filestotranslate), "List filtered to nothing.");
+                LastRunFailureReason = "All files were discarded (unsupported extensions).";
+                return;
             }
-            if (!TranslationService.Languages.ContainsKey(tolanguages[0])) throw new ArgumentException("Invalid 'to' language.", nameof(tolanguages));
+
+            if (tolanguages == null || tolanguages.Length == 0)
+            {
+                LastRunFailureReason = "No target language provided.";
+                return;
+            }
+
+            if (!TranslationService.Languages.ContainsKey(tolanguages[0]))
+            {
+                LastRunFailureReason = $"Invalid target language '{tolanguages[0]}'.";
+                return;
+            }
             #endregion
 
-            List<string> sourcefiles_prep = LocalFormats.LocalFormats.PreprocessSourceFiles(sourcefiles);
+            List<string> sourcefiles_prep;
+            try
+            {
+                sourcefiles_prep = LocalFormats.LocalFormats.PreprocessSourceFiles(sourcefiles);
+            }
+            catch (Exception ex)
+            {
+                LastRunFailureReason = $"Preprocessing failed: {ex.Message}";
+                return;
+            }
 
-            #region Create the containers
+            #region Create containers
             logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - container creation.");
             string containerNameBase = "doctr" + Guid.NewGuid().ToString();
             BlobContainerClient sourceContainer;
             try
             {
-                sourceContainer = new(TranslationService.StorageConnectionString, containerNameBase + "src");
+                sourceContainer = new BlobContainerClient(TranslationService.StorageConnectionString, containerNameBase + "src");
             }
             catch (Exception ex)
             {
                 logger.WriteLine(ex.Message + ex.InnerException?.Message);
                 OnContainerCreationFailure?.Invoke(this, ex.Message);
+                LastRunFailureReason = $"Source container client creation failed: {ex.Message}";
                 return;
             }
+
             var sourceContainerTask = sourceContainer.CreateIfNotExistsAsync();
             TranslationService.ContainerClientSource = sourceContainer;
+
             List<Task> targetContainerTasks = new();
             Dictionary<string, BlobContainerClient> targetContainers = new();
             TranslationService.ContainerClientTargets.Clear();
+
             foreach (string lang in tolanguages)
             {
-                BlobContainerClient targetContainer = new(TranslationService.StorageConnectionString, containerNameBase + "tgt" + lang.ToLowerInvariant());
-                targetContainerTasks.Add(targetContainer.CreateIfNotExistsAsync());
-                TranslationService.ContainerClientTargets.Add(lang, targetContainer);
-                targetContainers.Add(lang, targetContainer);
+                try
+                {
+                    BlobContainerClient targetContainer =
+                        new BlobContainerClient(TranslationService.StorageConnectionString, containerNameBase + "tgt" + lang.ToLowerInvariant());
+                    targetContainerTasks.Add(targetContainer.CreateIfNotExistsAsync());
+                    TranslationService.ContainerClientTargets.Add(lang, targetContainer);
+                    targetContainers.Add(lang, targetContainer);
+                }
+                catch (Exception ex)
+                {
+                    LastRunFailureReason = $"Target container creation failed for {lang}: {ex.Message}";
+                    OnFileReadWriteError?.Invoke(this, ex.Message);
+                    return;
+                }
             }
             #endregion
 
@@ -195,39 +206,49 @@ namespace DocumentTranslationService.Core
             {
                 logger.WriteLine(ex.Message + ex.InnerException?.Message);
                 OnContainerCreationFailure?.Invoke(this, ex.Message);
+                LastRunFailureReason = $"Source container creation failed: {ex.Message}";
                 return;
             }
+
             logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} END - container creation.");
-            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - Documents and glossaries upload.");
+            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - Documents & glossaries upload.");
             OnUploadStart?.Invoke(this, EventArgs.Empty);
-            int count = 0;
-            long sizeInBytes = 0;
+
+            int uploadedCount = 0;
+            long uploadedBytes = 0;
             List<Task> uploadTasks = new();
-            using (System.Threading.SemaphoreSlim semaphore = new(100))
+
+            using (System.Threading.SemaphoreSlim semaphore = new(50))
             {
                 foreach (var filename in sourcefiles_prep)
                 {
                     await semaphore.WaitAsync();
-
-                    BlobClient blobClient = new(TranslationService.StorageConnectionString, TranslationService.ContainerClientSource.Name, Normalize(filename));
+                    BlobClient blobClient = new BlobClient(TranslationService.StorageConnectionString,
+                                                           TranslationService.ContainerClientSource.Name,
+                                                           Normalize(filename));
                     try
                     {
-                        uploadTasks.Add(blobClient.UploadAsync(filename, true));
-                        count++;
-                        sizeInBytes += new FileInfo(filename).Length;
-                        semaphore.Release();
+                        uploadTasks.Add(blobClient.UploadAsync(filename, overwrite: true));
+                        uploadedCount++;
+                        uploadedBytes += new FileInfo(filename).Length;
                     }
                     catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or AggregateException or Azure.RequestFailedException)
                     {
                         logger.WriteLine($"Uploading file {filename} failed with {ex.Message}");
                         OnFileReadWriteError?.Invoke(this, ex.Message);
+                        LastRunFailureReason = $"File upload failed: {filename} - {ex.Message}";
                         if (!Nodelete) await DeleteContainersAsync(tolanguages);
+                        semaphore.Release();
                         return;
                     }
-                    logger.WriteLine($"File {filename} upload started.");
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                    logger.WriteLine($"File {filename} upload scheduled.");
                 }
             }
-            Debug.WriteLine("Awaiting document upload task completion.");
+
             try
             {
                 await Task.WhenAll(uploadTasks);
@@ -236,28 +257,32 @@ namespace DocumentTranslationService.Core
             {
                 logger.WriteLine($"Uploading files failed with {ex.Message}");
                 OnFileReadWriteError?.Invoke(this, ex.Message);
+                LastRunFailureReason = $"Batch upload failed: {ex.Message}";
                 if (!Nodelete) await DeleteContainersAsync(tolanguages);
                 return;
             }
-            //Upload Glossaries
-            glossary = new(TranslationService, glossaryfiles);
+
+            glossary = new Glossary(TranslationService, glossaryfiles);
             glossary.OnGlossaryDiscarded += Glossary_OnGlossaryDiscarded;
             try
             {
-                (int, long) result = await glossary.UploadAsync(TranslationService.StorageConnectionString, containerNameBase);
+                if (glossaryfiles != null && glossaryfiles.Count > 0)
+                    await glossary.UploadAsync(TranslationService.StorageConnectionString, containerNameBase);
             }
             catch (Exception ex)
             {
                 logger.WriteLine($"Glossaries upload failed with {ex.Message}");
                 OnFileReadWriteError?.Invoke(this, ex.Message);
+                LastRunFailureReason = $"Glossary upload failed: {ex.Message}";
                 if (!Nodelete) await DeleteContainersAsync(tolanguages);
                 return;
             }
-            OnUploadComplete?.Invoke(this, (count, sizeInBytes));
-            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} END - Document upload. {sizeInBytes} bytes in {count} documents.");
+
+            OnUploadComplete?.Invoke(this, (uploadedCount, uploadedBytes));
+            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} END - Document upload. {uploadedBytes} bytes in {uploadedCount} documents.");
             #endregion
 
-            #region Translate the container content
+            #region Translate
             try
             {
                 await Task.WhenAll(targetContainerTasks);
@@ -266,22 +291,23 @@ namespace DocumentTranslationService.Core
             {
                 logger.WriteLine($"Target container creation failed with {ex.Message}");
                 OnFileReadWriteError?.Invoke(this, ex.Message);
+                LastRunFailureReason = $"Target container creation failed: {ex.Message}";
                 if (!Nodelete) await DeleteContainersAsync(tolanguages);
                 return;
             }
 
-            DocumentTranslationOperation status;
             try
             {
                 DocumentTranslationInput input = GenerateInput(fromlanguage, tolanguages, sourceContainer, targetContainers, glossary, false);
                 string statusID = await TranslationService.SubmitTranslationRequestAsync(input);
-                logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - Translation service request with SAS token. StatusID: {statusID}");
+                logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - Translation request (SAS). StatusID: {statusID}");
             }
             catch (Azure.RequestFailedException ex)
             {
                 OnStatusUpdate?.Invoke(this, new StatusResponse(TranslationService.DocumentTranslationOperation, ex.ErrorCode + ": " + ex.Message));
-                logger.WriteLine($"Azure Request Failed - Error Code: {ex.ErrorCode}, Status: {ex.Status}, Message: {ex.Message}");
-                OnThereWereErrors?.Invoke(this, $"Azure Request Failed - Error Code: {ex.ErrorCode}, Status: {ex.Status}, Message: {ex.Message}");
+                logger.WriteLine($"Azure Request Failed - {ex.ErrorCode}: {ex.Message}");
+                OnThereWereErrors?.Invoke(this, $"Azure Request Failed - {ex.ErrorCode}: {ex.Message}");
+                LastRunFailureReason = $"Azure request failed: {ex.ErrorCode} {ex.Message}";
                 if (!Nodelete) await DeleteContainersAsync(tolanguages);
                 return;
             }
@@ -290,19 +316,22 @@ namespace DocumentTranslationService.Core
                 OnStatusUpdate?.Invoke(this, new StatusResponse(TranslationService.DocumentTranslationOperation, ex.Message));
                 logger.WriteLine($"Translation submission failed: {ex.Message}");
                 OnThereWereErrors?.Invoke(this, $"Translation submission failed: {ex.Message}");
+                LastRunFailureReason = $"Submission failed: {ex.Message}";
                 if (!Nodelete) await DeleteContainersAsync(tolanguages);
-                return;
-            }
-            if (TranslationService.DocumentTranslationOperation is null)
-            {
-                logger.WriteLine("ERROR: Start of translation job failed.");
-                if (!Nodelete) await DeleteContainersAsync(tolanguages);
-                OnThereWereErrors?.Invoke(this, "ERROR: Start of translation job failed with a NULL response from service.");
                 return;
             }
 
-            //Check on status until status is in a final state
+            if (TranslationService.DocumentTranslationOperation is null)
+            {
+                logger.WriteLine("ERROR: Translation operation null.");
+                OnThereWereErrors?.Invoke(this, "Translation operation null after submission.");
+                LastRunFailureReason = "Translation operation null.";
+                if (!Nodelete) await DeleteContainersAsync(tolanguages);
+                return;
+            }
+
             DateTimeOffset lastActionTime = DateTimeOffset.MinValue;
+            DocumentTranslationOperation status;
             do
             {
                 await Task.Delay(1000);
@@ -315,21 +344,20 @@ namespace DocumentTranslationService.Core
                 {
                     if (ex.ErrorCode == "InvalidRequest")
                     {
-                        //Retry with managed identity URIs:
                         try
                         {
-                            //Last parameter, here: true, forces managed identity
-                            DocumentTranslationInput input = GenerateInput(fromlanguage, tolanguages, sourceContainer, targetContainers, glossary, true);
-                            string statusID = await TranslationService.SubmitTranslationRequestAsync(input);
-                            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - Translation service request with Managed Identity. StatusID: {statusID}");
-                            await Task.Delay(200);
+                            DocumentTranslationInput inputMI = GenerateInput(fromlanguage, tolanguages, sourceContainer, targetContainers, glossary, true);
+                            string statusID = await TranslationService.SubmitTranslationRequestAsync(inputMI);
+                            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} RETRY - Translation request (Managed Identity). StatusID: {statusID}");
+                            await Task.Delay(300);
                             status = await TranslationService.CheckStatusAsync();
                         }
                         catch (Azure.RequestFailedException ex2)
                         {
                             OnStatusUpdate?.Invoke(this, new StatusResponse(TranslationService.DocumentTranslationOperation, ex2.ErrorCode + ": " + ex2.Message));
-                            logger.WriteLine("After trying with SAS token and managed identity URLs: " + ex2.ErrorCode + ": " + ex2.Message);
-                            OnThereWereErrors(this, ex2.ErrorCode + "  " + ex2.Message);
+                            logger.WriteLine("Retry with MI failed: " + ex2.ErrorCode + ": " + ex2.Message);
+                            OnThereWereErrors?.Invoke(this, ex2.ErrorCode + "  " + ex2.Message);
+                            LastRunFailureReason = $"Retry failed: {ex2.ErrorCode} {ex2.Message}";
                             return;
                         }
                     }
@@ -337,55 +365,68 @@ namespace DocumentTranslationService.Core
                     {
                         OnStatusUpdate?.Invoke(this, new StatusResponse(TranslationService.DocumentTranslationOperation, ex.ErrorCode + ": " + ex.Message));
                         logger.WriteLine(ex.ErrorCode + ": " + ex.Message);
-                        OnThereWereErrors(this, ex.ErrorCode + "  " + ex.Message);
+                        OnThereWereErrors?.Invoke(this, ex.ErrorCode + "  " + ex.Message);
+                        LastRunFailureReason = $"Status check failed: {ex.ErrorCode} {ex.Message}";
                         return;
                     }
                 }
                 catch (Exception ex)
                 {
-                    OnThereWereErrors(this, ex.Message);
-                    logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Status: {ex.Message}");
+                    OnThereWereErrors?.Invoke(this, ex.Message);
+                    logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Status error: {ex.Message}");
+                    LastRunFailureReason = $"Status error: {ex.Message}";
                     return;
                 }
-                logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Http status: {TranslationService.AzureHttpStatus.Status} {TranslationService.AzureHttpStatus.ReasonPhrase}");
-                OnHeartBeat?.Invoke(this, TranslationService.AzureHttpStatus.Status);
+
                 if (status is null)
                 {
-                    logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Failed to receive status: Translation run terminated with: {TranslationService.AzureHttpStatus.Status} {TranslationService.AzureHttpStatus.ReasonPhrase}");
-                    OnThereWereErrors?.Invoke(this, $"Failed to receive status: Translation run terminated with: {TranslationService.AzureHttpStatus.Status} {TranslationService.AzureHttpStatus.ReasonPhrase}");
+                    LastRunFailureReason = "Status returned null.";
+                    OnThereWereErrors?.Invoke(this, "Status returned null.");
                     return;
                 }
+
+                logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Http status: {TranslationService.AzureHttpStatus.Status} {TranslationService.AzureHttpStatus.ReasonPhrase}");
+                OnHeartBeat?.Invoke(this, TranslationService.AzureHttpStatus.Status);
+
                 logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Service status: {status.CreatedOn} {status.Status}");
                 if (status.LastModified != lastActionTime)
                 {
-                    //Raise the update event
                     OnStatusUpdate?.Invoke(this, new StatusResponse(status));
                     lastActionTime = status.LastModified;
                 }
+
+                if (status.Status == DocumentTranslationStatus.ValidationFailed)
+                {
+                    LastRunFailureReason = "Validation failed.";
+                    OnThereWereErrors?.Invoke(this, "Validation failed.");
+                    if (!Nodelete) await DeleteContainersAsync(tolanguages);
+                    return;
+                }
             }
-            while (
-                  (status.DocumentsInProgress != 0)
-                || (!status.HasCompleted));
+            while (status.DocumentsInProgress != 0 || !status.HasCompleted);
+
             OnStatusUpdate?.Invoke(this, new StatusResponse(status));
             Task<List<DocumentStatusResult>> finalResultsTask = TranslationService.GetFinalResultsAsync();
-            if (status.Status == DocumentTranslationStatus.ValidationFailed) return;
             #endregion
 
-            #region Download the translations
-            //Chance for optimization: Check status on the documents and start download immediately after each document is translated. 
+            #region Download
             logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} START - document download.");
-            count = 0;
-            sizeInBytes = 0;
+            int downloadedCount = 0;
+            long downloadedBytes = 0;
+
             foreach (string lang in tolanguages)
             {
                 string directoryName;
-                if (string.IsNullOrEmpty(targetFolder)) directoryName = Path.GetDirectoryName(sourcefiles[0]) + Path.DirectorySeparatorChar + lang;
+                if (string.IsNullOrEmpty(targetFolder))
+                    directoryName = Path.GetDirectoryName(sourcefiles[0]) + Path.DirectorySeparatorChar + lang;
+                else if (targetFolder.Contains('*'))
+                    directoryName = targetFolder.Replace("*", lang);
+                else if (tolanguages.Length == 1)
+                    directoryName = targetFolder;
                 else
-                    if (targetFolder.Contains('*')) directoryName = targetFolder.Replace("*", lang);
-                else
-                        if (tolanguages.Length == 1) directoryName = targetFolder;
-                else directoryName = targetFolder + Path.DirectorySeparatorChar + lang;
-                DirectoryInfo directory = new(directoryName);
+                    directoryName = targetFolder + Path.DirectorySeparatorChar + lang;
+
+                DirectoryInfo directory;
                 try
                 {
                     directory = Directory.CreateDirectory(directoryName);
@@ -394,21 +435,24 @@ namespace DocumentTranslationService.Core
                 {
                     logger.WriteLine(ex.Message);
                     OnFileReadWriteError?.Invoke(this, ex.Message);
+                    LastRunFailureReason = $"Unauthorized creating output directory: {directoryName}";
                     if (!Nodelete) await DeleteContainersAsync(tolanguages);
                     return;
                 }
+
                 List<Task> downloads = new();
-                using (System.Threading.SemaphoreSlim semaphore = new(100))
+                using (System.Threading.SemaphoreSlim semaphore = new(50))
                 {
                     await foreach (var blobItem in TranslationService.ContainerClientTargets[lang].GetBlobsAsync())
                     {
                         await semaphore.WaitAsync();
                         downloads.Add(DownloadBlobAsync(directory, blobItem, lang));
-                        count++;
-                        sizeInBytes += (long)blobItem.Properties.ContentLength;
+                        downloadedCount++;
+                        downloadedBytes += (long)(blobItem.Properties.ContentLength ?? 0);
                         semaphore.Release();
                     }
                 }
+
                 try
                 {
                     await Task.WhenAll(downloads);
@@ -417,27 +461,33 @@ namespace DocumentTranslationService.Core
                 {
                     logger.WriteLine("Download error: " + ex.Message);
                     OnFileReadWriteError?.Invoke(this, "Download failure: " + ex.Message);
+                    LastRunFailureReason = $"Download failure: {ex.Message}";
                 }
-                this.TargetFolder = directoryName;
+
+                TargetFolder = directoryName;
             }
-            //Process the local file formats after download.
+
             try
             {
-                LocalFormats.LocalFormats.PostprocessTargetFiles(Directory.GetFiles(TargetFolder).ToList());
+                if (Directory.Exists(TargetFolder))
+                {
+                    LocalFormats.LocalFormats.PostprocessTargetFiles(Directory.GetFiles(TargetFolder).ToList());
+                }
             }
             catch (Exception ex)
             {
                 logger.WriteLine("Postprocessing error: " + ex.Message);
                 OnFileReadWriteError?.Invoke(this, "Postprocessing failure: " + ex.Message);
             }
-
             #endregion
-            #region final
-            OnDownloadComplete?.Invoke(this, (count, sizeInBytes));
-            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} END - Documents downloaded: {sizeInBytes} bytes in {count} files.");
-            if (!Nodelete) await DeleteContainersAsync(tolanguages);
+
+            #region Finalization
+            OnDownloadComplete?.Invoke(this, (downloadedCount, downloadedBytes));
+            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} END - Documents downloaded: {downloadedBytes} bytes in {downloadedCount} files.");
+
             var finalResults = await finalResultsTask;
             OnFinalResults?.Invoke(this, CharactersCharged(finalResults));
+
             StringBuilder sb = new();
             bool thereWereErrors = false;
             foreach (var documentStatus in finalResults)
@@ -445,8 +495,8 @@ namespace DocumentTranslationService.Core
                 if (documentStatus.Error is not null)
                 {
                     thereWereErrors = true;
-                    sb.Append(ToDisplayForm(documentStatus.SourceDocumentUri.LocalPath) + "\t");
-                    sb.Append(documentStatus.TranslatedToLanguageCode + "\t");
+                    sb.Append(ToDisplayForm(documentStatus.SourceDocumentUri.LocalPath)).Append('\t');
+                    sb.Append(documentStatus.TranslatedToLanguageCode).Append('\t');
                     sb.Append(documentStatus.Error.Message);
                     sb.AppendLine(" (" + documentStatus.Error.Code + ")");
                 }
@@ -455,7 +505,19 @@ namespace DocumentTranslationService.Core
             {
                 OnThereWereErrors?.Invoke(this, sb.ToString());
             }
-            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Run: Exiting.");
+
+            // If no files downloaded and no explicit failure reason, set a diagnostic reason
+            if (downloadedCount == 0 && LastRunFailureReason == null)
+            {
+                LastRunFailureReason = "No translated documents were produced (zero blobs in target containers).";
+            }
+
+            LastRunSuccessful = downloadedCount > 0 && LastRunFailureReason == null;
+
+            if (!Nodelete)
+                await DeleteContainersAsync(tolanguages);
+
+            logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Run: Exiting. Success={LastRunSuccessful} FailureReason={LastRunFailureReason}");
             logger.Close();
             #endregion
         }
@@ -465,15 +527,21 @@ namespace DocumentTranslationService.Core
             OnGlossariesDiscarded?.Invoke(this, e);
         }
 
-        private DocumentTranslationInput GenerateInput(string fromlanguage, string[] tolanguages, BlobContainerClient sourceContainer, Dictionary<string, BlobContainerClient> targetContainers, Glossary glossary, bool UseManagedIdentity)
+        private DocumentTranslationInput GenerateInput(string fromlanguage,
+                                                       string[] tolanguages,
+                                                       BlobContainerClient sourceContainer,
+                                                       Dictionary<string, BlobContainerClient> targetContainers,
+                                                       Glossary glossary,
+                                                       bool UseManagedIdentity)
         {
             Uri sourceUri = GenerateSasUriSource(sourceContainer, UseManagedIdentity);
             TranslationSource translationSource = new(sourceUri);
             logger.WriteLine($"UseManagedIdentity: {UseManagedIdentity}");
             logger.WriteLine($"SourceURI: {sourceUri}");
-            if (!(string.IsNullOrEmpty(fromlanguage)))
+
+            if (!string.IsNullOrEmpty(fromlanguage))
             {
-                if (fromlanguage.ToLowerInvariant() == "auto")
+                if (fromlanguage.Equals("auto", StringComparison.OrdinalIgnoreCase))
                     translationSource.LanguageCode = null;
                 else
                     translationSource.LanguageCode = fromlanguage;
@@ -482,16 +550,18 @@ namespace DocumentTranslationService.Core
             Dictionary<string, Uri> sasUriTargets = GenerateSasUriTargets(tolanguages, targetContainers, UseManagedIdentity);
             List<TranslationTarget> translationTargets = new();
             logger.WriteLine($"Category value: '{TranslationService.Category}' (Length: {TranslationService.Category?.Length ?? -1})");
+
             foreach (string lang in tolanguages)
             {
                 TranslationTarget translationTarget = new(sasUriTargets[lang], lang);
-                if (glossary.Glossaries is not null)
+                if (glossary?.Glossaries is not null)
                 {
                     if (UseManagedIdentity)
                         foreach (var glos in glossary.PlainUriGlossaries) translationTarget.Glossaries.Add(glos.Value);
                     else
                         foreach (var glos in glossary.Glossaries) translationTarget.Glossaries.Add(glos.Value);
                 }
+
                 if (!string.IsNullOrEmpty(TranslationService.Category))
                 {
                     logger.WriteLine($"Setting CategoryId to: '{TranslationService.Category}'");
@@ -501,12 +571,16 @@ namespace DocumentTranslationService.Core
                 {
                     logger.WriteLine("Category is null or empty - not setting CategoryId");
                 }
+
                 translationTargets.Add(translationTarget);
             }
-            return new(translationSource, translationTargets);
+
+            return new DocumentTranslationInput(translationSource, translationTargets);
         }
 
-        private Dictionary<string, Uri> GenerateSasUriTargets(string[] tolanguages, Dictionary<string, BlobContainerClient> targetContainers, bool UseManagedIdentity)
+        private Dictionary<string, Uri> GenerateSasUriTargets(string[] tolanguages,
+                                                              Dictionary<string, BlobContainerClient> targetContainers,
+                                                              bool UseManagedIdentity)
         {
             Dictionary<string, Uri> sasUriTargets = new();
             foreach (string lang in tolanguages)
@@ -514,19 +588,21 @@ namespace DocumentTranslationService.Core
                 if (UseManagedIdentity)
                     sasUriTargets.Add(lang, targetContainers[lang].Uri);
                 else
-                    sasUriTargets.Add(lang, targetContainers[lang].GenerateSasUri(BlobContainerSasPermissions.Write | BlobContainerSasPermissions.List, DateTimeOffset.UtcNow + TimeSpan.FromHours(5)));
+                    sasUriTargets.Add(lang, targetContainers[lang].GenerateSasUri(
+                        BlobContainerSasPermissions.Write | BlobContainerSasPermissions.List,
+                        DateTimeOffset.UtcNow + TimeSpan.FromHours(5)));
+
                 logger.WriteLine($"TargetURI: {sasUriTargets[lang]}");
             }
-
             return sasUriTargets;
         }
 
         private static Uri GenerateSasUriSource(BlobContainerClient sourceContainer, bool UseManagedIdentity)
         {
-            if (UseManagedIdentity)
-                return sourceContainer.Uri;
-            else
-                return sourceContainer.GenerateSasUri(BlobContainerSasPermissions.Read | BlobContainerSasPermissions.List, DateTimeOffset.UtcNow + TimeSpan.FromHours(5));
+            return UseManagedIdentity
+                ? sourceContainer.Uri
+                : sourceContainer.GenerateSasUri(BlobContainerSasPermissions.Read | BlobContainerSasPermissions.List,
+                                                 DateTimeOffset.UtcNow + TimeSpan.FromHours(5));
         }
 
         private static string ToDisplayForm(string localPath)
@@ -539,42 +615,34 @@ namespace DocumentTranslationService.Core
         {
             long characterscharged = 0;
             foreach (var result in finalResults)
-            {
                 characterscharged += result.CharactersCharged;
-            }
+
             logger.WriteLine($"Total characters charged: {characterscharged}");
             return characterscharged;
         }
 
-        /// <summary>
-        /// Download a single blob item
-        /// </summary>
-        /// <param name="directory">Directory name to prepend to the file name.</param>
-        /// <param name="blobItem">The actual blob</param>
-        /// <returns>Task</returns>
         private async Task DownloadBlobAsync(DirectoryInfo directory, BlobItem blobItem, string tolanguage)
         {
-            BlobClient blobClient = new(TranslationService.StorageConnectionString, TranslationService.ContainerClientTargets[tolanguage].Name, blobItem.Name);
+            BlobClient blobClient = new BlobClient(TranslationService.StorageConnectionString,
+                                                   TranslationService.ContainerClientTargets[tolanguage].Name,
+                                                   blobItem.Name);
             BlobDownloadInfo blobDownloadInfo = await blobClient.DownloadAsync();
             FileStream downloadFileStream;
             try
             {
-                downloadFileStream = File.Create(directory.FullName + Path.DirectorySeparatorChar + blobItem.Name);
+                downloadFileStream = File.Create(Path.Combine(directory.FullName, blobItem.Name));
             }
             catch (IOException)
             {
-                //This happens when target folder is same as source. Try again with a different file name in same folder.
-                downloadFileStream = File.Create(directory.FullName + Path.DirectorySeparatorChar + Path.GetFileNameWithoutExtension(blobItem.Name) + "." + tolanguage + Path.GetExtension(blobItem.Name));
+                downloadFileStream = File.Create(Path.Combine(directory.FullName,
+                                     Path.GetFileNameWithoutExtension(blobItem.Name) + "." + tolanguage + Path.GetExtension(blobItem.Name)));
             }
+
             await blobDownloadInfo.Content.CopyToAsync(downloadFileStream);
             downloadFileStream.Close();
             logger.WriteLine("Downloaded: " + downloadFileStream.Name);
         }
 
-        /// <summary>
-        ///Delete older containers that may have been around from previous failed or abandoned runs
-        /// </summary>
-        /// <returns>Number of old containers that were deleted</returns>
         public async Task<int> ClearOldContainersAsync()
         {
             logger.WriteLine("START - Abandoned containers deletion.");
@@ -582,14 +650,15 @@ namespace DocumentTranslationService.Core
             List<Task> deletionTasks = new();
             BlobServiceClient blobServiceClient = new(TranslationService.StorageConnectionString);
             var resultSegment = blobServiceClient.GetBlobContainersAsync(BlobContainerTraits.None, BlobContainerStates.None, "doctr").AsPages();
+
             await foreach (Azure.Page<BlobContainerItem> containerPage in resultSegment)
             {
                 foreach (var containerItem in containerPage.Values)
                 {
                     BlobContainerClient client = new(TranslationService.StorageConnectionString, containerItem.Name);
-                    if (containerItem.Name.EndsWith("src")
-                        || (containerItem.Name.Contains("tgt"))
-                        || (containerItem.Name.Contains("gls")))
+                    if (containerItem.Name.EndsWith("src") ||
+                        containerItem.Name.Contains("tgt") ||
+                        containerItem.Name.Contains("gls"))
                     {
                         if (containerItem.Properties.LastModified < (DateTimeOffset.UtcNow - TimeSpan.FromDays(7)))
                         {
@@ -599,43 +668,53 @@ namespace DocumentTranslationService.Core
                     }
                 }
             }
+
             await Task.WhenAll(deletionTasks);
             logger.WriteLine($"END - Abandoned containers deleted: {counter}");
             return counter;
         }
 
-        /// <summary>
-        /// Delete the containers created by this instance.
-        /// </summary>
-        /// <returns>The task only</returns>
         private async Task DeleteContainersAsync(string[] tolanguages)
         {
             logger.WriteLine("START - Container deletion.");
-            List<Task> deletionTasks = new()
+            List<Task> deletionTasks = new();
+
+            if (TranslationService?.ContainerClientSource is not null)
+                deletionTasks.Add(SafeDeleteAsync(TranslationService.ContainerClientSource));
+
+            if (TranslationService?.ContainerClientTargets is not null && tolanguages != null)
             {
-                //delete the containers of this run
-                TranslationService.ContainerClientSource.DeleteAsync()
-            };
-            foreach (string lang in tolanguages)
-                deletionTasks.Add(TranslationService.ContainerClientTargets[lang].DeleteAsync());
-            deletionTasks.Add(glossary.DeleteAsync());
-            if (DateTime.Now.Millisecond < 100) deletionTasks.Add(ClearOldContainersAsync());  //Clear out old stuff ~ every 10th time. 
-            await Task.WhenAll(deletionTasks);
+                foreach (string lang in tolanguages)
+                {
+                    if (TranslationService.ContainerClientTargets.TryGetValue(lang, out var tgtClient) && tgtClient is not null)
+                        deletionTasks.Add(SafeDeleteAsync(tgtClient));
+                }
+            }
+
+            if (glossary is not null)
+            {
+                try { deletionTasks.Add(glossary.DeleteAsync()); }
+                catch (Exception ex) { logger.WriteLine("Glossary delete scheduling failed: " + ex.Message); }
+            }
+
+            if (DateTime.Now.Millisecond < 100)
+            {
+                try { deletionTasks.Add(ClearOldContainersAsync()); }
+                catch (Exception ex) { logger.WriteLine("ClearOldContainersAsync scheduling failed: " + ex.Message); }
+            }
+
+            try { await Task.WhenAll(deletionTasks); }
+            catch (Exception ex) { logger.WriteLine("Container deletion encountered errors: " + ex.Message); }
             logger.WriteLine("END - Containers deleted.");
         }
 
-        public static string Normalize(string filename)
+        private static async Task SafeDeleteAsync(BlobContainerClient client)
         {
-            return Path.GetFileName(filename);
+            try { await client.DeleteAsync(); } catch { }
         }
 
-        /// <summary>
-        /// Filters the list of files to the ones matching the extension.
-        /// </summary>
-        /// <param name="fileNames">List of files to filter.</param>
-        /// <param name="validExtensions">Hash of valid extensions.</param>
-        /// <param name="discarded">The files that were discarded</param>
-        /// <returns>Tuple of the filtered list and the discards.</returns>
+        public static string Normalize(string filename) => Path.GetFileName(filename);
+
         public static (List<string>, List<string>) FilterByExtension(List<string> fileNames, HashSet<string> validExtensions)
         {
             if (fileNames is null) return (null, null);
@@ -643,11 +722,12 @@ namespace DocumentTranslationService.Core
             List<string> discardedNames = new();
             foreach (string filename in fileNames)
             {
-                if (validExtensions.Contains(Path.GetExtension(filename).ToLowerInvariant())) validNames.Add(filename);
-                else discardedNames.Add(filename);
+                if (validExtensions.Contains(Path.GetExtension(filename).ToLowerInvariant()))
+                    validNames.Add(filename);
+                else
+                    discardedNames.Add(filename);
             }
             return (validNames, discardedNames);
         }
     }
 }
-

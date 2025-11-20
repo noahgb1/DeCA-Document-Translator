@@ -1,4 +1,3 @@
-
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.IO.Compression;
@@ -25,7 +24,7 @@ namespace DocumentTranslation.Web.Pages
             _translationBusiness = translationBusiness;
         }
 
-        // CHANGED: support multiple files
+        // Multiple file support
         [BindProperty]
         public List<IFormFile?> UploadedFiles { get; set; } = new();
 
@@ -41,6 +40,10 @@ namespace DocumentTranslation.Web.Pages
         public List<string> TranslatedFiles { get; set; } = new();
 
         public List<LanguageOption> AvailableLanguages { get; set; } = new();
+
+        // Diagnostics
+        private bool _downloadCompleted;
+        private readonly List<string> _capturedErrors = new();
 
         public async Task OnGetAsync()
         {
@@ -66,7 +69,7 @@ namespace DocumentTranslation.Web.Pages
 
             try
             {
-                // Initialize the translation service
+                // Initialize the translation service (ensure metadata present)
                 await _translationService.InitializeAsync();
 
                 // Create uploads directory
@@ -117,21 +120,24 @@ namespace DocumentTranslation.Web.Pages
                     return Page();
                 }
 
-                // Setup event handlers for translation progress
-                _translationBusiness.OnStatusUpdate += (sender, status) =>
-                {
-                    _logger.LogInformation($"Translation status: {status}");
-                };
+                // Reset diagnostics before each run
+                _downloadCompleted = false;
+                _capturedErrors.Clear();
 
-                _translationBusiness.OnThereWereErrors += (sender, errors) =>
-                {
-                    _logger.LogError($"Translation errors: {errors}");
-                };
+                // DETACH prior handlers (avoid accumulation on multiple POSTs)
+                _translationBusiness.OnStatusUpdate -= TranslationBusiness_OnStatusUpdate;
+                _translationBusiness.OnThereWereErrors -= TranslationBusiness_OnThereWereErrors;
+                _translationBusiness.OnDownloadComplete -= TranslationBusiness_OnDownloadComplete;
+
+                // Attach handlers
+                _translationBusiness.OnStatusUpdate += TranslationBusiness_OnStatusUpdate;
+                _translationBusiness.OnThereWereErrors += TranslationBusiness_OnThereWereErrors;
+                _translationBusiness.OnDownloadComplete += TranslationBusiness_OnDownloadComplete;
 
                 var targetLanguages = new string[] { TargetLanguage };
                 var fromLanguage = string.IsNullOrEmpty(SourceLanguage) ? null : SourceLanguage;
 
-                // Run translation using the service library for all files
+                // Run translation
                 await _translationBusiness.RunAsync(
                     filestotranslate: filesToTranslate,
                     fromlanguage: fromLanguage,
@@ -139,18 +145,36 @@ namespace DocumentTranslation.Web.Pages
                     glossaryfiles: null,
                     targetFolder: outputPath);
 
-                Message = $"Translation completed successfully! {filesToTranslate.Count} file(s) translated to {TargetLanguage}.";
-
-                // Get list of translated files directly from output folder
-                if (Directory.Exists(outputPath))
+                // Outcome evaluation
+                if (_downloadCompleted && Directory.Exists(outputPath))
                 {
                     var files = Directory.GetFiles(outputPath);
-                    TranslatedFiles = files.Select(f => Path.GetFileName(f)).ToList();
-                    _logger.LogInformation("Translated files: {Files}", string.Join(", ", TranslatedFiles));
+                    if (files.Length > 0)
+                    {
+                        TranslatedFiles = files.Select(f => Path.GetFileName(f)).ToList();
+                        Message = $"Translation completed successfully! {files.Length} file(s) translated to {TargetLanguage}.";
+                        _logger.LogInformation("Translated files: {Files}", string.Join(", ", TranslatedFiles));
+                    }
+                    else
+                    {
+                        ErrorMessage = "Translation finished but produced no output files.";
+                        _logger.LogWarning("DownloadComplete event fired, but output folder empty.");
+                    }
+                }
+                else if (_capturedErrors.Count > 0)
+                {
+                    ErrorMessage = "Translation failed. " + string.Join(" | ", _capturedErrors);
+                }
+                else if (!_translationBusiness.LastRunSuccessful && _translationBusiness.LastRunFailureReason != null)
+                {
+                    // NEW: surface internal failure reason from business layer
+                    ErrorMessage = _translationBusiness.LastRunFailureReason;
+                    _logger.LogWarning("Early termination reason: {Reason}", _translationBusiness.LastRunFailureReason);
                 }
                 else
                 {
-                    _logger.LogWarning("Output folder {OutputPath} does not exist", outputPath);
+                    // Generic fallback
+                    ErrorMessage = "Translation ended early without output. Check logs for details.";
                 }
             }
             catch (DocumentTranslationService.Core.DocumentTranslationService.CredentialsException ex)
@@ -167,6 +191,24 @@ namespace DocumentTranslation.Web.Pages
             return Page();
         }
 
+        // Event handlers
+        private void TranslationBusiness_OnStatusUpdate(object? sender, StatusResponse status)
+        {
+            _logger.LogInformation("Translation status: {Status}", status);
+        }
+
+        private void TranslationBusiness_OnThereWereErrors(object? sender, string errors)
+        {
+            _logger.LogError("Translation errors: {Errors}", errors);
+            _capturedErrors.Add(errors);
+        }
+
+        private void TranslationBusiness_OnDownloadComplete(object? sender, (int count, long bytes) info)
+        {
+            _downloadCompleted = true;
+            _logger.LogInformation("Download complete: {Count} files, {Bytes} bytes", info.count, info.bytes);
+        }
+
         private async Task LoadAvailableLanguagesAsync()
         {
             try
@@ -179,14 +221,12 @@ namespace DocumentTranslation.Web.Pages
                     AvailableLanguages.Add(new LanguageOption(lang.LangCode, lang.Name ?? lang.LangCode));
                 }
 
-                // Sort by name for better UX
                 AvailableLanguages = AvailableLanguages.OrderBy(l => l.Name).ToList();
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to load available languages, using default list");
 
-                // Fallback to a default list if service is not configured
                 AvailableLanguages = new List<LanguageOption>
                 {
                     new("fr", "French"),
@@ -213,7 +253,6 @@ namespace DocumentTranslation.Web.Pages
             var outputPath = Path.Combine(_environment.WebRootPath, "uploads", "output");
             var filePath = Path.Combine(outputPath, fileName);
 
-            // Security check - ensure the file is within the output directory
             var fullPath = Path.GetFullPath(filePath);
             var fullOutputPath = Path.GetFullPath(outputPath);
 
@@ -253,14 +292,12 @@ namespace DocumentTranslation.Web.Pages
                 return NotFound();
             }
 
-            // If there's only one file, download it directly
             if (files.Length == 1)
             {
                 var fileName = Path.GetFileName(files[0]);
                 return await OnGetDownloadAsync(fileName);
             }
 
-            // If multiple files, create a zip archive
             var zipStream = new MemoryStream();
             using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
             {
@@ -305,16 +342,15 @@ namespace DocumentTranslation.Web.Pages
             {
                 try
                 {
-                    // Try using FileStream for better control over file access
                     await CopyFileWithStreamAsync(sourceFile, destinationFile);
-                    return; // Success, exit the retry loop
+                    return;
                 }
                 catch (IOException ex)
                 {
                     bool isRetryableError = ex.Message.Contains("being used by another process") ||
                                             ex.Message.Contains("cannot access the file") ||
-                                            ex.HResult == -2147024864 || // ERROR_SHARING_VIOLATION
-                                            ex.HResult == -2147024891;   // ERROR_ACCESS_DENIED
+                                            ex.HResult == -2147024864 ||
+                                            ex.HResult == -2147024891;
 
                     if (!isRetryableError || retry == maxRetries - 1)
                     {
@@ -346,10 +382,8 @@ namespace DocumentTranslation.Web.Pages
         private async Task CopyFileWithStreamAsync(string sourceFile, string destinationFile)
         {
             const int bufferSize = 1024 * 1024; // 1MB buffer
-
             using var sourceStream = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, FileOptions.SequentialScan);
             using var destinationStream = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.SequentialScan);
-
             await sourceStream.CopyToAsync(destinationStream);
         }
     }

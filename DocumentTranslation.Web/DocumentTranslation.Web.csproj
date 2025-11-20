@@ -11,4 +11,10 @@
     <ProjectReference Include="..\DocumentTranslationService\DocumentTranslationService.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.*" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="2.*" />
+    <PackageReference Include="Microsoft.Identity.Web.UI" Version="2.*" />
+  </ItemGroup>
+
 </Project>

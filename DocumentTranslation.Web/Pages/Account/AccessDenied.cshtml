@@ -1,0 +1,11 @@
+@page
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Access Denied";
+}
+<div class="container mt-4">
+    <h2>Access Denied</h2>
+    <p>You do not have sufficient permissions to access this resource.</p>
+    <p><a class="btn btn-primary" href="/">Return to Home</a></p>
+</div>
