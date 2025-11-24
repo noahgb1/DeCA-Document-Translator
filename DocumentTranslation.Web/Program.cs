@@ -1,76 +1,39 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.IIS;
+using Microsoft.AspNetCore.HttpOverrides;
+using DocumentTranslation.Web.Hubs;
 using DocumentTranslation.Web.Models;
 using DocumentTranslationService.Core;
-using DocumentTranslation.Web.Hubs;
-
-using Microsoft.Identity.Web;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ------------------------------------------------------------------
-// DATA PROTECTION (fix antiforgery decrypt issues across restarts)
-// ------------------------------------------------------------------
-builder.Services.AddDataProtection()
-    .PersistKeysToFileSystem(new DirectoryInfo("/home/data-protection"))
-    .SetApplicationName("DeCA-Document-Translator");
+// Ensure binding to expected port (8080 from WEBSITES_PORT)
+var appServicePort = Environment.GetEnvironmentVariable("WEBSITES_PORT") ?? "8080";
+var urlsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+if (string.IsNullOrWhiteSpace(urlsEnv))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{appServicePort}");
+    Console.WriteLine($"[STARTUP] Binding to http://0.0.0.0:{appServicePort}");
+}
+else
+{
+    Console.WriteLine($"[STARTUP] Using existing ASPNETCORE_URLS={urlsEnv}");
+}
 
-// ------------------------------------------------------------------
-// RAZOR + MICROSOFT IDENTITY UI
-// ------------------------------------------------------------------
-builder.Services
-    .AddRazorPages()
-    .AddMicrosoftIdentityUI();
-
+// Core services
+builder.Services.AddRazorPages();
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 
-// ------------------------------------------------------------------
-// AUTHENTICATION (single registration to avoid duplicate Cookies scheme)
-// Use the helper extension provided by Microsoft.Identity.Web.
-// This internally registers the cookie & OpenIdConnect schemes once.
-// ------------------------------------------------------------------
-var azureAdSection = builder.Configuration.GetSection("AzureAd");
-if (azureAdSection.Exists())
-{
-    // This replaces manual AddAuthentication + AddMicrosoftIdentityWebApp calls.
-    builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd");
-}
-
-// (OPTIONAL) If you need custom cookie settings, use PostConfigure to avoid re‑adding the scheme.
-builder.Services.PostConfigure<CookieAuthenticationOptions>(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme, opts =>
-{
-    opts.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-    opts.SlidingExpiration = true;
-    opts.ExpireTimeSpan = TimeSpan.FromMinutes(60);
-});
-
-// ------------------------------------------------------------------
-// AUTHORIZATION
-// Temporarily remove the global fallback during debugging so unauthenticated
-// requests (e.g., static assets or first visit) don’t trigger multiple redirects.
-// Re‑enable once stable.
-// ------------------------------------------------------------------
-builder.Services.AddAuthorization(options =>
-{
-    // Commented out fallback for now:
-    // options.FallbackPolicy = new AuthorizationPolicyBuilder()
-    //     .RequireAuthenticatedUser()
-    //     .Build();
-
-    options.AddPolicy("RequireTranslatorAdmin", p => p.RequireRole("Translator.Admin"));
-    options.AddPolicy("RequireTranslatorUser", p => p.RequireRole("Translator.User"));
-});
-
-// ------------------------------------------------------------------
-// DOCUMENT TRANSLATION OPTIONS
-// ------------------------------------------------------------------
+// Translation options
 builder.Services.Configure<DocumentTranslationOptions>(
     builder.Configuration.GetSection("DocumentTranslation"));
 
+// Translation service registration
 builder.Services.AddSingleton<DocumentTranslationService.Core.DocumentTranslationService>(sp =>
 {
     var options = sp.GetRequiredService<
@@ -100,9 +63,101 @@ builder.Services.AddScoped<DocumentTranslationBusiness>(sp =>
     return new DocumentTranslationBusiness(svc);
 });
 
-// ------------------------------------------------------------------
-// FILE UPLOAD LIMITS
-// ------------------------------------------------------------------
+// Authentication (cookie + basic OIDC)
+// Ensure you have app.UseForwardedHeaders(...) before UseAuthentication() in the pipeline.
+var azureAdSection = builder.Configuration.GetSection("AzureAd");
+var instance  = azureAdSection["Instance"]?.TrimEnd('/') ?? "https://login.microsoftonline.us";
+var tenantId  = azureAdSection["TenantId"];
+var clientId  = azureAdSection["ClientId"];
+
+if (string.IsNullOrWhiteSpace(tenantId))
+    throw new InvalidOperationException("AzureAd:TenantId is required.");
+if (string.IsNullOrWhiteSpace(clientId))
+    throw new InvalidOperationException("AzureAd:ClientId is required.");
+
+var authority       = $"{instance}/{tenantId}/v2.0";
+var metadataAddress = $"{authority}/.well-known/openid-configuration";
+
+builder.Services
+    .AddAuthentication(o =>
+    {
+        o.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        o.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+    })
+    .AddCookie(o =>
+    {
+        o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        o.Cookie.SameSite = SameSiteMode.None; // helps with OIDC cross-site redirects
+        o.SlidingExpiration = true;
+        o.ExpireTimeSpan = TimeSpan.FromMinutes(60);
+    })
+    .AddOpenIdConnect(o =>
+    {
+        // Bind first (to pick up ClientId, ClientSecret, CallbackPath, etc.)
+        azureAdSection.Bind(o);
+
+        // Then set computed authority endpoints explicitly
+        o.Authority = authority;
+        o.MetadataAddress = metadataAddress;
+
+        o.ResponseType = "code";
+        o.SaveTokens = true;
+        o.RequireHttpsMetadata = true;
+
+        o.Scope.Clear();
+        o.Scope.Add("openid");
+        o.Scope.Add("profile");
+
+        o.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+        {
+            RoleClaimType = "roles",
+            NameClaimType = "name"
+        };
+
+        o.Events = new OpenIdConnectEvents
+        {
+            OnRedirectToIdentityProvider = ctx =>
+            {
+                // Fallback: if proxy headers say https but Request.Scheme is http, ensure https redirect_uri
+                if (!string.Equals(ctx.Request.Scheme, "https", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ctx.Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rp = o.CallbackPath.HasValue ? o.CallbackPath.Value : "/signin-oidc";
+                    ctx.ProtocolMessage.RedirectUri = $"https://{ctx.Request.Host}{ctx.Request.PathBase}{rp}";
+                    Console.WriteLine("[OIDC] Overriding redirect_uri to HTTPS: " + ctx.ProtocolMessage.RedirectUri);
+                }
+                return Task.CompletedTask;
+            },
+            OnAuthenticationFailed = ctx =>
+            {
+                Console.WriteLine("[OIDC] Authentication failed: " + ctx.Exception?.Message);
+                return Task.CompletedTask;
+            },
+            OnRemoteFailure = ctx =>
+            {
+                Console.WriteLine("[OIDC] Remote failure: " + ctx.Failure?.Message);
+                return Task.CompletedTask;
+            },
+            OnTokenValidated = ctx =>
+            {
+                Console.WriteLine("[OIDC] Token validated for: " + (ctx.Principal?.Identity?.Name ?? "(no name)"));
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+// Authorization
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+
+    options.AddPolicy("RequireTranslatorAdmin", p => p.RequireRole("Translator.Admin"));
+    options.AddPolicy("RequireTranslatorUser", p => p.RequireRole("Translator.User"));
+});
+
+// Upload limits
 builder.Services.Configure<IISServerOptions>(o =>
 {
     o.MaxRequestBodySize = 100 * 1024 * 1024;
@@ -114,9 +169,9 @@ builder.Services.Configure<FormOptions>(o =>
     o.MultipartHeadersLengthLimit = int.MaxValue;
 });
 
-// ------------------------------------------------------------------
-// BUILD APP
-// ------------------------------------------------------------------
+// Temporary: show identity model PII to see inner network exception
+Microsoft.IdentityModel.Logging.IdentityModelEventSource.ShowPII = true;
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
@@ -125,53 +180,52 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-// ------------------------------------------------------------------
-// FORWARDED HEADERS (apply options explicitly)
-// ------------------------------------------------------------------
+// Forwarded headers BEFORE auth so scheme/host are corrected
 var fwd = new ForwardedHeadersOptions
 {
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor |
-                       ForwardedHeaders.XForwardedProto |
-                       ForwardedHeaders.XForwardedHost
+    ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto
 };
+// Clear defaults (we trust Azure front end)
 fwd.KnownNetworks.Clear();
 fwd.KnownProxies.Clear();
 app.UseForwardedHeaders(fwd);
 
-// Consider disabling HTTPS redirection inside container to remove “Failed to determine https port”
-// if Azure Front End already terminates TLS. Uncomment only if required:
-// app.UseHttpsRedirection();
+// Fallback scheme normalization (in case headers not present)
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Request.Headers.TryGetValue("X-Forwarded-Proto", out var proto)
+        && proto.Count > 0
+        && proto[0].Equals("https", StringComparison.OrdinalIgnoreCase))
+    {
+        ctx.Request.Scheme = "https";
+    }
+    await next();
+});
 
+// Remove explicit HTTPS redirection (Azure already terminates TLS)
 app.UseStaticFiles();
 app.UseRouting();
 
-if (azureAdSection.Exists())
-{
-    app.UseAuthentication();
-    app.UseAuthorization();
-}
+app.UseAuthentication();
+app.UseAuthorization();
 
-// OPTIONAL manual endpoints (can remove later)
 app.MapGet("/signin", async ctx =>
 {
-    // Single challenge endpoint for manual sign-in if needed
     await ctx.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme,
-        new Microsoft.AspNetCore.Authentication.AuthenticationProperties { RedirectUri = "/" });
+        new AuthenticationProperties { RedirectUri = "/" });
 });
 
 app.MapGet("/signout", async ctx =>
 {
-    await ctx.SignOutAsync(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
-    ctx.Response.Redirect("/Account/SignedOut");
+    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    ctx.Response.Redirect("/");
 });
 
-// Health probe
 app.MapGet("/health", () => Results.Ok("healthy"));
 
-// Endpoints
 app.MapRazorPages();
 app.MapControllers();
-app.MapHub<TranslationProgressHub>("/translationProgressHub"); // remove .RequireAuthorization() during debugging if needed
+app.MapHub<TranslationProgressHub>("/translationProgressHub");
 
 app.Run();
 

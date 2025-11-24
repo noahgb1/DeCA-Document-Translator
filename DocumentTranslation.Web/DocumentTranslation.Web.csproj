@@ -4,17 +4,17 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>_</RootNamespace>
+    <RootNamespace>DocumentTranslation.Web</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DocumentTranslationService\DocumentTranslationService.csproj" />
+    <ProjectReference Include="..\\DocumentTranslationService\\DocumentTranslationService.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.*" />
-    <PackageReference Include="Microsoft.Identity.Web" Version="2.*" />
-    <PackageReference Include="Microsoft.Identity.Web.UI" Version="2.*" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="2.20.0" />
+    <PackageReference Include="Microsoft.Identity.Web.UI" Version="2.20.0" />
   </ItemGroup>
 
 </Project>

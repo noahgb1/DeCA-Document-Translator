@@ -1,15 +1,11 @@
-@using System.Security.Claims
 @{
     var isAuth = User?.Identity?.IsAuthenticated ?? false;
+    var name = User?.Identity?.Name ?? "(user)";
 }
 <div class="d-flex align-items-center gap-2">
 @if (isAuth)
 {
-    <span class="text-white-50">Hello, @User.Identity!.Name</span>
-    @if (User.IsInRole("Translator.Admin"))
-    {
-        <span class="badge text-bg-warning">Admin</span>
-    }
+    <span class="text-white-50">Hello, @name</span>
     <a class="btn btn-sm btn-outline-light" href="/signout">Sign out</a>
 }
 else

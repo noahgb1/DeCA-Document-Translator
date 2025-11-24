@@ -1,4 +1,5 @@
-﻿﻿using Azure.AI.Translation.Document;
+﻿﻿#nullable enable
+using Azure.AI.Translation.Document;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
@@ -17,16 +18,12 @@ namespace DocumentTranslationService.Core
         #region Properties
         public DocumentTranslationService TranslationService { get; }
 
-        /// <summary>Final target folder where translated files were placed.</summary>
         public string TargetFolder { get; private set; }
 
-        /// <summary>Prevent deletion of storage containers (debugging).</summary>
         public bool Nodelete { get; set; } = false;
 
-        /// <summary>Indicates overall run success (at least one translated file downloaded).</summary>
         public bool LastRunSuccessful { get; private set; }
 
-        /// <summary>Reason for failure or early termination (null if successful).</summary>
         public string? LastRunFailureReason { get; private set; }
 
         public event EventHandler<string> OnThereWereErrors;
@@ -43,17 +40,20 @@ namespace DocumentTranslationService.Core
 
         private readonly Logger logger = new();
         private Glossary glossary;
+
+        // NEW: Deterministic retention window
+        private readonly TimeSpan _retentionWindow;
         #endregion Properties
 
         public DocumentTranslationBusiness(DocumentTranslationService documentTranslationService)
         {
             TranslationService = documentTranslationService;
+            // Read retention hours from env (default 1 hour if missing/invalid)
+            var raw = Environment.GetEnvironmentVariable("DocumentTranslation__ContainerRetentionHours");
+            if (!int.TryParse(raw, out var hours) || hours < 1) hours = 1;
+            _retentionWindow = TimeSpan.FromHours(hours);
         }
 
-        /// <summary>
-        /// Perform a translation of a set of files.
-        /// Sets LastRunSuccessful / LastRunFailureReason instead of throwing for most early exits.
-        /// </summary>
         public async Task RunAsync(List<string> filestotranslate,
                                    string fromlanguage,
                                    string[] tolanguages,
@@ -506,7 +506,6 @@ namespace DocumentTranslationService.Core
                 OnThereWereErrors?.Invoke(this, sb.ToString());
             }
 
-            // If no files downloaded and no explicit failure reason, set a diagnostic reason
             if (downloadedCount == 0 && LastRunFailureReason == null)
             {
                 LastRunFailureReason = "No translated documents were produced (zero blobs in target containers).";
@@ -515,7 +514,7 @@ namespace DocumentTranslationService.Core
             LastRunSuccessful = downloadedCount > 0 && LastRunFailureReason == null;
 
             if (!Nodelete)
-                await DeleteContainersAsync(tolanguages);
+                await DeleteContainersAsync(tolanguages); // deterministic cleanup invoked inside
 
             logger.WriteLine($"{stopwatch.Elapsed.TotalSeconds} Run: Exiting. Success={LastRunSuccessful} FailureReason={LastRunFailureReason}");
             logger.Close();
@@ -697,15 +696,44 @@ namespace DocumentTranslationService.Core
                 catch (Exception ex) { logger.WriteLine("Glossary delete scheduling failed: " + ex.Message); }
             }
 
-            if (DateTime.Now.Millisecond < 100)
-            {
-                try { deletionTasks.Add(ClearOldContainersAsync()); }
-                catch (Exception ex) { logger.WriteLine("ClearOldContainersAsync scheduling failed: " + ex.Message); }
-            }
+            // Deterministic retention cleanup after deleting run containers
+            deletionTasks.Add(CleanupEphemeralOlderThanAsync(_retentionWindow));
 
             try { await Task.WhenAll(deletionTasks); }
             catch (Exception ex) { logger.WriteLine("Container deletion encountered errors: " + ex.Message); }
             logger.WriteLine("END - Containers deleted.");
+        }
+
+        private async Task CleanupEphemeralOlderThanAsync(TimeSpan age)
+        {
+            try
+            {
+                BlobServiceClient blobServiceClient = new(TranslationService.StorageConnectionString);
+                var pages = blobServiceClient.GetBlobContainersAsync(BlobContainerTraits.None, BlobContainerStates.None, "doctr").AsPages();
+                List<Task> deletes = new();
+                int candidateCount = 0;
+
+                await foreach (var page in pages)
+                {
+                    foreach (var item in page.Values)
+                    {
+                        if (item.Properties.LastModified < DateTimeOffset.UtcNow - age)
+                        {
+                            if (item.Name.EndsWith("src") || item.Name.Contains("tgt") || item.Name.Contains("gls"))
+                            {
+                                deletes.Add(new BlobContainerClient(TranslationService.StorageConnectionString, item.Name).DeleteAsync());
+                                candidateCount++;
+                            }
+                        }
+                    }
+                }
+                await Task.WhenAll(deletes);
+                logger.WriteLine($"Deterministic retention cleanup: Deleted {deletes.Count} / {candidateCount} containers older than {age.TotalMinutes} min.");
+            }
+            catch (Exception ex)
+            {
+                logger.WriteLine("Retention cleanup error: " + ex.Message);
+            }
         }
 
         private static async Task SafeDeleteAsync(BlobContainerClient client)

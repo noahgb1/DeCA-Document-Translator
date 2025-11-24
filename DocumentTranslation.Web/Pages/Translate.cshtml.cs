@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.IO.Compression;
@@ -5,6 +6,7 @@ using DocumentTranslationService.Core;
 
 namespace DocumentTranslation.Web.Pages
 {
+    [Authorize]
     public class TranslateModel : PageModel
     {
         private readonly ILogger<TranslateModel> _logger;
@@ -69,8 +71,12 @@ namespace DocumentTranslation.Web.Pages
 
             try
             {
-                // Initialize the translation service (ensure metadata present)
+                // Initialize translator service (populate formats & languages)
                 await _translationService.InitializeAsync();
+                _logger.LogInformation("InitializeAsync completed. User={User} Extensions={ExtCount} Languages={LangCount}",
+                    User?.Identity?.Name ?? "(anonymous)",
+                    _translationService.Extensions?.Count ?? -1,
+                    _translationService.Languages?.Count ?? -1);
 
                 // Create uploads directory
                 var uploadsPath = Path.Combine(_environment.WebRootPath, "uploads");
@@ -120,6 +126,9 @@ namespace DocumentTranslation.Web.Pages
                     return Page();
                 }
 
+                _logger.LogInformation("Preparing translation run: FileCount={Count} TargetLanguage={Target} SourceLanguage={Source}",
+                    filesToTranslate.Count, TargetLanguage, string.IsNullOrEmpty(SourceLanguage) ? "(auto)" : SourceLanguage);
+
                 // Reset diagnostics before each run
                 _downloadCompleted = false;
                 _capturedErrors.Clear();
@@ -136,6 +145,9 @@ namespace DocumentTranslation.Web.Pages
 
                 var targetLanguages = new string[] { TargetLanguage };
                 var fromLanguage = string.IsNullOrEmpty(SourceLanguage) ? null : SourceLanguage;
+
+                // (Optional) Keep containers for debugging; set to false once stable
+                _translationBusiness.Nodelete = true;
 
                 // Run translation
                 await _translationBusiness.RunAsync(
@@ -167,7 +179,7 @@ namespace DocumentTranslation.Web.Pages
                 }
                 else if (!_translationBusiness.LastRunSuccessful && _translationBusiness.LastRunFailureReason != null)
                 {
-                    // NEW: surface internal failure reason from business layer
+                    // Surface internal failure reason from business layer
                     ErrorMessage = _translationBusiness.LastRunFailureReason;
                     _logger.LogWarning("Early termination reason: {Reason}", _translationBusiness.LastRunFailureReason);
                 }
